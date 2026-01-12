@@ -47,17 +47,17 @@ use std::sync::Arc;
 
 vulkano::impl_vertex!(DummyVertex, position);
 
-mod voxel_vert {
+mod water_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/render/shaders/voxel.vert",
+        path: "src/render/shaders/water.vert",
     }
 }
 
-mod voxel_frag {
+mod water_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/render/shaders/voxel.frag",
+        path: "src/render/shaders/water.frag",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -93,7 +93,7 @@ pub struct Render {
     acquire_future: Option<SwapchainAcquireFuture>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
 
-    camera_buffer: Arc<CpuAccessibleBuffer<voxel_frag::ty::Camera>>,
+    camera_buffer: Arc<CpuAccessibleBuffer<water_frag::ty::Camera>>,
 }
 
 impl Render {
@@ -250,8 +250,8 @@ impl Render {
         let command_buffer_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
-        let deferred_vert = voxel_vert::load(device.clone()).unwrap();
-        let deferred_frag = voxel_frag::load(device.clone()).unwrap();
+        let deferred_vert = water_vert::load(device.clone()).unwrap();
+        let deferred_frag = water_frag::load(device.clone()).unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -323,7 +323,7 @@ impl Render {
                 ..BufferUsage::empty()
             },
             false,
-            voxel_frag::ty::Camera {
+            water_frag::ty::Camera {
                 invProj: [[0.0; 4]; 4],
                 invView: [[0.0; 4]; 4],
                 camPos: [0.0; 3],
