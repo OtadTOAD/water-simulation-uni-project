@@ -32,13 +32,13 @@ impl Engine {
 
     pub fn tick(&self, delta_time: f64) {
         let mut camera = self.camera.lock().unwrap();
-        let input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap();
 
         if input.is_action_active(&Action::ShutDown) {
             println!("Shutting down engine...");
             std::process::exit(0);
         }
 
-        camera.tick(&input, delta_time);
+        camera.tick(&mut input, delta_time);
     }
 }

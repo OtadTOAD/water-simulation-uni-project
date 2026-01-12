@@ -66,8 +66,15 @@ impl InputManager {
         self.actions.contains(action)
     }
 
+    #[allow(dead_code)]
     pub fn get_mouse_delta(&self) -> (f64, f64) {
         self.mouse_delta
+    }
+
+    pub fn take_mouse_delta(&mut self) -> (f64, f64) {
+        let delta = self.mouse_delta;
+        self.mouse_delta = (0.0, 0.0);
+        delta
     }
 
     pub fn on_event(&mut self, event: InputEvent) {

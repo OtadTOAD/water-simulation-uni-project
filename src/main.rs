@@ -3,6 +3,7 @@ mod render;
 
 use std::sync::{Arc, Mutex, RwLock};
 
+use nalgebra_glm::Vec3;
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
@@ -32,7 +33,7 @@ fn main() {
 
     // Engine setup
     let input_manager = Arc::new(Mutex::new(InputManager::new()));
-    let camera = Arc::new(Mutex::new(Camera::new([0.0, 1.0, -2.0])));
+    let camera = Arc::new(Mutex::new(Camera::new(Vec3::new(-2.0, -1.0, 0.0))));
     let engine = Arc::new(RwLock::new(Engine::new(
         input_manager.clone(),
         camera.clone(),
@@ -120,16 +121,22 @@ fn main() {
                 // Need to set scope this way so lock gets released before next frame
                 {
                     let mut engine_camera = camera.lock().unwrap();
-                    if engine_camera.is_changed {
+                    if engine_camera.is_dirty {
                         engine_camera.update_matrices(render.aspect_ratio);
-                        engine_camera.is_changed = !render.set_camera(&engine_camera);
+                        engine_camera.is_dirty = !render.set_camera(&engine_camera);
                     }
                 }
 
-                let engine_water = engine.read().unwrap();
+                let engine_render = engine.read().unwrap();
 
                 render.start();
-                render.water(&engine_water.water.clone());
+
+                let water_batch = engine_render.water.get_draw_batches();
+                for (res, instances) in water_batch {
+                    let water_mesh = engine_render.water.get_mesh_for_res(res);
+                    render.water(&water_mesh, instances);
+                }
+
                 render.finish(&mut previous_frame_end);
             }
             _ => (),

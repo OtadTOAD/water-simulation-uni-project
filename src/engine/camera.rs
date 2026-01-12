@@ -1,68 +1,58 @@
 use crate::engine::input::InputManager;
+use nalgebra_glm as glm;
 
 const MOVE_SPEED: f32 = 25.0;
 const ROTATE_SPEED: f32 = 0.01;
+const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
 pub struct Camera {
-    pub position: [f32; 3],
+    pub position: glm::Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub fov: f32,
 
-    pub is_changed: bool,
-
-    inv_proj: [[f32; 4]; 4],
-    inv_view: [[f32; 4]; 4],
+    proj: glm::Mat4,
+    view: glm::Mat4,
+    pub is_dirty: bool,
 }
 
 impl Camera {
-    pub fn new(pos: [f32; 3]) -> Self {
-        Camera {
-            position: pos,
+    pub fn new(position: glm::Vec3) -> Self {
+        Self {
+            position,
             yaw: 0.0,
             pitch: 0.0,
             fov: 70.0_f32.to_radians(),
-
-            is_changed: true,
-
-            inv_proj: [[0.0; 4]; 4],
-            inv_view: [[0.0; 4]; 4],
+            proj: glm::Mat4::identity(),
+            view: glm::Mat4::identity(),
+            is_dirty: true,
         }
     }
 
-    pub fn forward(&self) -> [f32; 3] {
-        [
+    pub fn forward(&self) -> glm::Vec3 {
+        glm::vec3(
             self.yaw.cos() * self.pitch.cos(),
             self.pitch.sin(),
             self.yaw.sin() * self.pitch.cos(),
-        ]
+        )
     }
 
-    pub fn right(&self) -> [f32; 3] {
-        [
+    pub fn right(&self) -> glm::Vec3 {
+        glm::vec3(
             (self.yaw + std::f32::consts::FRAC_PI_2).cos(),
             0.0,
             (self.yaw + std::f32::consts::FRAC_PI_2).sin(),
-        ]
+        )
     }
 
-    pub fn up(&self) -> [f32; 3] {
-        let sin_pitch = self.pitch.sin();
-        [
-            -sin_pitch * self.yaw.cos(),
-            self.pitch.cos(),
-            -sin_pitch * self.yaw.sin(),
-        ]
-    }
+    /* Don't need this for now
+    pub fn up(&self) -> glm::Vec3 {
+        glm::cross(&self.right(), &self.forward())
+    }*/
 
     pub fn move_forward(&mut self, distance: f32) {
-        let forward = self.forward();
-
-        self.position[0] += forward[0] * distance;
-        self.position[1] += forward[1] * distance;
-        self.position[2] += forward[2] * distance;
-
-        self.is_changed = true;
+        self.position += self.forward() * distance;
+        self.is_dirty = true;
     }
 
     pub fn move_backward(&mut self, distance: f32) {
@@ -70,86 +60,81 @@ impl Camera {
     }
 
     pub fn move_right(&mut self, distance: f32) {
-        let right = self.right();
-        self.position[0] += right[0] * distance;
-        self.position[2] += right[2] * distance;
-
-        self.is_changed = true;
+        self.position += self.right() * distance;
+        self.is_dirty = true;
     }
 
     pub fn move_left(&mut self, distance: f32) {
         self.move_right(-distance);
     }
 
+    pub fn move_up(&mut self, distance: f32) {
+        self.position.y -= distance; // Vulkan Y is down
+        self.is_dirty = true;
+    }
+
+    pub fn move_down(&mut self, distance: f32) {
+        self.move_up(-distance);
+    }
+
     pub fn rotate(&mut self, delta_yaw: f32, delta_pitch: f32) {
         self.yaw += delta_yaw;
-        self.pitch -= delta_pitch;
-
-        // Clamp pitch to avoid flipping
-        let pitch_limit = std::f32::consts::FRAC_PI_2 - 0.01;
-        if self.pitch > pitch_limit {
-            self.pitch = pitch_limit;
-        } else if self.pitch < -pitch_limit {
-            self.pitch = -pitch_limit;
-        }
-
-        self.is_changed = true;
+        self.pitch = (self.pitch + delta_pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        self.is_dirty = true;
     }
 
     pub fn update_matrices(&mut self, aspect_ratio: f32) {
-        if !self.is_changed {
+        if !self.is_dirty {
             return;
         }
 
-        let tan_half_fov = (self.fov * 0.5).tan();
-        self.inv_proj = [
-            [tan_half_fov * aspect_ratio, 0.0, 0.0, 0.0],
-            [0.0, tan_half_fov, 0.0, 0.0],
-            [0.0, 0.0, 0.0, -1.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ];
+        // Perspective projection for Vulkan (reverse Z for better depth precision)
+        self.proj = glm::perspective_fov_rh_zo(self.fov, aspect_ratio, 1.0, 0.1, 1000.0);
 
-        let forward = self.forward();
-        let right = self.right();
-        let up = self.up();
-        self.inv_view = [
-            [right[0], up[0], -forward[0], 0.0],
-            [right[1], up[1], -forward[1], 0.0],
-            [right[2], up[2], -forward[2], 0.0],
-            [self.position[0], self.position[1], self.position[2], 1.0],
-        ];
+        // View matrix: look from position in the direction we're facing
+        let target = self.position + self.forward();
+        self.view = glm::look_at_rh(&self.position, &target, &glm::Vec3::y());
+
+        self.is_dirty = false;
     }
 
-    pub fn get_matrices(&self) -> (&[[f32; 4]; 4], &[[f32; 4]; 4]) {
-        (&self.inv_proj, &self.inv_view)
-    }
+    pub fn tick(&mut self, input: &mut InputManager, delta_time: f64) {
+        let dt = delta_time as f32;
 
-    pub fn tick(&mut self, input: &InputManager, delta_time: f64) {
         if input.is_action_active(&super::input::Action::MoveForward) {
-            self.move_forward(MOVE_SPEED * delta_time as f32);
+            self.move_forward(MOVE_SPEED * dt);
         }
         if input.is_action_active(&super::input::Action::MoveBackward) {
-            self.move_backward(MOVE_SPEED * delta_time as f32);
+            self.move_backward(MOVE_SPEED * dt);
         }
         if input.is_action_active(&super::input::Action::MoveLeft) {
-            self.move_left(MOVE_SPEED * delta_time as f32);
+            self.move_left(MOVE_SPEED * dt);
         }
         if input.is_action_active(&super::input::Action::MoveRight) {
-            self.move_right(MOVE_SPEED * delta_time as f32);
+            self.move_right(MOVE_SPEED * dt);
         }
         if input.is_action_active(&super::input::Action::MoveUp) {
-            self.position[1] += MOVE_SPEED * delta_time as f32;
-            self.is_changed = true;
+            self.move_up(MOVE_SPEED * dt);
         }
         if input.is_action_active(&super::input::Action::MoveDown) {
-            self.position[1] -= MOVE_SPEED * delta_time as f32;
-            self.is_changed = true;
+            self.move_down(MOVE_SPEED * dt);
         }
 
-        let (delta_x, delta_y) = input.get_mouse_delta();
+        let (delta_x, delta_y) = input.take_mouse_delta();
         if delta_x != 0.0 || delta_y != 0.0 {
             self.rotate(delta_x as f32 * ROTATE_SPEED, delta_y as f32 * ROTATE_SPEED);
-            self.is_changed = true;
         }
+    }
+}
+
+impl Camera {
+    pub fn view_matrix_raw(&self) -> [[f32; 4]; 4] {
+        //glm::transpose(&self.view).into()
+        self.view.into()
+    }
+
+    pub fn projection_matrix_raw(&self) -> [[f32; 4]; 4] {
+        //glm::transpose(&self.proj).into()
+        self.proj.into()
     }
 }

@@ -1,7 +1,8 @@
 pub mod dummy_vertex;
 
-use crate::engine::mesh::Vertex;
-use crate::engine::{Camera, water};
+use crate::engine::Camera;
+use crate::engine::mesh::{Mesh, Vertex};
+use crate::engine::water::WaterInstance;
 use dummy_vertex::DummyVertex;
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess};
@@ -48,6 +49,7 @@ use std::sync::Arc;
 
 vulkano::impl_vertex!(DummyVertex, position); // 2D position only(Use for screen quads)
 vulkano::impl_vertex!(Vertex, position, normal, tangent, uv); // Full vertex, used for meshes
+vulkano::impl_vertex!(WaterInstance, instance_model, instance_normal);
 
 mod water_vert {
     vulkano_shaders::shader! {
@@ -287,13 +289,17 @@ impl Render {
 
         let geometry_pass = Subpass::from(render_pass.clone(), 0).unwrap();
         let geometry_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+            .vertex_input_state(
+                BuffersDefinition::new()
+                    .vertex::<Vertex>()
+                    .instance::<WaterInstance>(),
+            )
             .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
             .fragment_shader(deferred_frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
-            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+            .rasterization_state(RasterizationState::new().cull_mode(CullMode::None))
             .render_pass(geometry_pass.clone())
             .build(device.clone())
             .unwrap();
@@ -319,8 +325,8 @@ impl Render {
             },
             false,
             water_vert::ty::Camera {
-                invProj: [[0.0; 4]; 4],
-                invView: [[0.0; 4]; 4],
+                proj: [[0.0; 4]; 4],
+                view: [[0.0; 4]; 4],
                 camPos: [0.0; 3],
             },
         )
@@ -369,10 +375,12 @@ impl Render {
     pub fn set_camera(&mut self, camera: &Camera) -> bool {
         match self.camera_buffer.write() {
             Ok(mut content) => {
-                let (inv_proj, inv_view) = camera.get_matrices();
-                content.camPos = camera.position;
-                content.invProj = *inv_proj;
-                content.invView = *inv_view;
+                let proj = camera.projection_matrix_raw();
+                let view = camera.view_matrix_raw();
+
+                content.camPos = camera.position.into();
+                content.proj = proj;
+                content.view = view;
 
                 return true;
             }
@@ -380,7 +388,7 @@ impl Render {
         }
     }
 
-    pub fn water(&mut self, w: &Arc<water::Water>) {
+    pub fn water(&mut self, mesh: &Mesh, instances: Vec<&WaterInstance>) {
         match self.render_stage {
             RenderStage::Water => {}
             RenderStage::NeedsRedraw => {
@@ -396,11 +404,19 @@ impl Render {
             }
         }
 
-        // TODO: In future, we will probably have multiple grids to render(But for now just one is fine)
-        // When you start implementing that, rememebr to implement instancing and LODs
+        let inst_len = instances.len();
+        let inst_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            instances.iter().cloned().cloned(),
+        )
+        .unwrap();
 
         // TODO: Creating buffers every frame is bad(Since water mesh very rarely changes, create once and reuse)
-        let water_mesh = w.mesh.clone();
         let vertex_buffer = CpuAccessibleBuffer::from_iter(
             &self.memory_allocator,
             BufferUsage {
@@ -408,7 +424,7 @@ impl Render {
                 ..BufferUsage::empty()
             },
             false,
-            water_mesh.vertices.iter().cloned(),
+            mesh.vertices.iter().cloned(),
         )
         .unwrap();
         let index_buffer = CpuAccessibleBuffer::from_iter(
@@ -418,7 +434,7 @@ impl Render {
                 ..BufferUsage::empty()
             },
             false,
-            water_mesh.indices.iter().cloned(),
+            mesh.indices.iter().cloned(),
         )
         .unwrap();
 
@@ -446,9 +462,9 @@ impl Render {
                 0,
                 geometry_set.clone(),
             )
-            .bind_vertex_buffers(0, vertex_buffer.clone())
+            .bind_vertex_buffers(0, (vertex_buffer.clone(), inst_buffer.clone()))
             .bind_index_buffer(index_buffer.clone())
-            .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
+            .draw_indexed(index_buffer.len() as u32, inst_len as u32, 0, 0, 0)
             .unwrap();
     }
 
