@@ -1,6 +1,7 @@
 pub mod dummy_vertex;
 
-use crate::engine::Camera;
+use crate::engine::mesh::Vertex;
+use crate::engine::{Camera, water};
 use dummy_vertex::DummyVertex;
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess};
@@ -45,19 +46,13 @@ use winit::window::{Window, WindowBuilder};
 use std::mem;
 use std::sync::Arc;
 
-vulkano::impl_vertex!(DummyVertex, position);
+vulkano::impl_vertex!(DummyVertex, position); // 2D position only(Use for screen quads)
+vulkano::impl_vertex!(Vertex, position, normal, tangent, uv); // Full vertex, used for meshes
 
 mod water_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/render/shaders/water.vert",
-    }
-}
-
-mod water_frag {
-    vulkano_shaders::shader! {
-        ty: "fragment",
-        path: "src/render/shaders/water.frag",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -66,10 +61,23 @@ mod water_frag {
     }
 }
 
+mod water_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/render/shaders/water.frag",
+        /* Uncomment if you add custom types
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },*/
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RenderStage {
     Stopped,
-    Voxel,
+    Water,
     NeedsRedraw,
 }
 
@@ -83,8 +91,7 @@ pub struct Render {
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: StandardCommandBufferAllocator,
     render_pass: Arc<RenderPass>,
-    voxel_pipeline: Arc<GraphicsPipeline>,
-    dummy_verts: Arc<CpuAccessibleBuffer<[DummyVertex]>>,
+    geometry_pipeline: Arc<GraphicsPipeline>,
     viewport: Viewport,
     framebuffers: Vec<Arc<Framebuffer>>,
     render_stage: RenderStage,
@@ -93,7 +100,7 @@ pub struct Render {
     acquire_future: Option<SwapchainAcquireFuture>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
 
-    camera_buffer: Arc<CpuAccessibleBuffer<water_frag::ty::Camera>>,
+    camera_buffer: Arc<CpuAccessibleBuffer<water_vert::ty::Camera>>,
 }
 
 impl Render {
@@ -278,30 +285,18 @@ impl Render {
         )
         .unwrap();
 
-        let voxel_pass = Subpass::from(render_pass.clone(), 0).unwrap();
-
-        let voxel_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
+        let geometry_pass = Subpass::from(render_pass.clone(), 0).unwrap();
+        let geometry_pipeline = GraphicsPipeline::start()
+            .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
             .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
             .fragment_shader(deferred_frag.entry_point("main").unwrap(), ())
-            .depth_stencil_state(DepthStencilState::disabled())
-            .rasterization_state(RasterizationState::new().cull_mode(CullMode::None))
-            .render_pass(voxel_pass.clone())
+            .depth_stencil_state(DepthStencilState::simple_depth_test())
+            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+            .render_pass(geometry_pass.clone())
             .build(device.clone())
             .unwrap();
-
-        let dummy_verts = CpuAccessibleBuffer::from_iter(
-            &memory_allocator,
-            BufferUsage {
-                vertex_buffer: true,
-                ..BufferUsage::empty()
-            },
-            false,
-            DummyVertex::list().iter().cloned(),
-        )
-        .unwrap();
 
         let mut viewport = Viewport {
             origin: [0.0, 0.0],
@@ -323,7 +318,7 @@ impl Render {
                 ..BufferUsage::empty()
             },
             false,
-            water_frag::ty::Camera {
+            water_vert::ty::Camera {
                 invProj: [[0.0; 4]; 4],
                 invView: [[0.0; 4]; 4],
                 camPos: [0.0; 3],
@@ -350,8 +345,7 @@ impl Render {
             descriptor_set_allocator,
             command_buffer_allocator,
             render_pass,
-            voxel_pipeline,
-            dummy_verts,
+            geometry_pipeline,
             viewport,
             framebuffers,
             render_stage,
@@ -386,9 +380,9 @@ impl Render {
         }
     }
 
-    pub fn voxel(&mut self) {
+    pub fn water(&mut self, w: &Arc<water::Water>) {
         match self.render_stage {
-            RenderStage::Voxel => {}
+            RenderStage::Water => {}
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();
                 self.render_stage = RenderStage::Stopped;
@@ -402,10 +396,41 @@ impl Render {
             }
         }
 
-        let voxel_layout = self.voxel_pipeline.layout().set_layouts().get(0).unwrap();
-        let voxel_set = PersistentDescriptorSet::new(
+        // TODO: In future, we will probably have multiple grids to render(But for now just one is fine)
+        // When you start implementing that, rememebr to implement instancing and LODs
+
+        // TODO: Creating buffers every frame is bad(Since water mesh very rarely changes, create once and reuse)
+        let water_mesh = w.mesh.clone();
+        let vertex_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            water_mesh.vertices.iter().cloned(),
+        )
+        .unwrap();
+        let index_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                index_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            water_mesh.indices.iter().cloned(),
+        )
+        .unwrap();
+
+        let geometry_layout = self
+            .geometry_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let geometry_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
-            voxel_layout.clone(),
+            geometry_layout.clone(),
             [WriteDescriptorSet::buffer(0, self.camera_buffer.clone())],
         )
         .unwrap();
@@ -414,21 +439,22 @@ impl Render {
             .as_mut()
             .unwrap()
             .set_viewport(0, [self.viewport.clone()])
-            .bind_pipeline_graphics(self.voxel_pipeline.clone())
+            .bind_pipeline_graphics(self.geometry_pipeline.clone())
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
-                self.voxel_pipeline.layout().clone(),
+                self.geometry_pipeline.layout().clone(),
                 0,
-                voxel_set.clone(),
+                geometry_set.clone(),
             )
-            .bind_vertex_buffers(0, self.dummy_verts.clone())
-            .draw(self.dummy_verts.len() as u32, 1, 0, 0)
+            .bind_vertex_buffers(0, vertex_buffer.clone())
+            .bind_index_buffer(index_buffer.clone())
+            .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
             .unwrap();
     }
 
     pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
         match self.render_stage {
-            RenderStage::Voxel => {}
+            RenderStage::Water => {}
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();
                 self.commands = None;
@@ -489,7 +515,7 @@ impl Render {
     pub fn start(&mut self) {
         match self.render_stage {
             RenderStage::Stopped => {
-                self.render_stage = RenderStage::Voxel;
+                self.render_stage = RenderStage::Water;
             }
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();

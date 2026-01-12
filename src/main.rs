@@ -32,7 +32,7 @@ fn main() {
 
     // Engine setup
     let input_manager = Arc::new(Mutex::new(InputManager::new()));
-    let camera = Arc::new(Mutex::new(Camera::new([0.0, 10.0, 0.0])));
+    let camera = Arc::new(Mutex::new(Camera::new([0.0, 1.0, -2.0])));
     let engine = Arc::new(RwLock::new(Engine::new(
         input_manager.clone(),
         camera.clone(),
@@ -46,10 +46,11 @@ fn main() {
 
     // Physics thread
     {
+        let engine_physics = engine.clone();
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(PHYSICS_STEP_MS));
-                let e = engine.write().unwrap();
+                let e = engine_physics.write().unwrap();
                 e.tick(PHYSICS_STEP_SEC);
             }
         });
@@ -125,8 +126,10 @@ fn main() {
                     }
                 }
 
+                let engine_water = engine.read().unwrap();
+
                 render.start();
-                render.voxel();
+                render.water(&engine_water.water.clone());
                 render.finish(&mut previous_frame_end);
             }
             _ => (),

@@ -19,6 +19,7 @@ impl DummyVertex {
     /// This list will draw a square across the entire rendering area. This will
     /// cause the fragment shaders to execute on all pixels in the rendering
     /// area.
+    #[allow(dead_code)]
     pub fn list() -> [DummyVertex; 6] {
         [
             DummyVertex {
