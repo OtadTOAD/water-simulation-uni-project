@@ -9,5 +9,6 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     // Simple debug shader to visualize normals
-    outColor = vec4(in_normal * 0.5 + 0.5, 1.0);
+    vec3 colorBlue = vec3(35, 137, 218) / 255.0;
+    outColor = vec4(colorBlue, 1.0);
 }

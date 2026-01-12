@@ -1,8 +1,8 @@
 use crate::engine::input::InputManager;
 use nalgebra_glm as glm;
 
-const MOVE_SPEED: f32 = 25.0;
-const ROTATE_SPEED: f32 = 0.01;
+const MOVE_SPEED: f32 = 5.0;
+const ROTATE_SPEED: f32 = 0.005;
 const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
 pub struct Camera {
