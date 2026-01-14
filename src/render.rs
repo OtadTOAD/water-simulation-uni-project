@@ -1,8 +1,10 @@
 pub mod dummy_vertex;
+pub mod simulation;
 
 use crate::engine::Camera;
 use crate::engine::mesh::{Mesh, Vertex};
 use crate::engine::water::WaterInstance;
+use crate::render::simulation::Simulation;
 use dummy_vertex::DummyVertex;
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess};
@@ -32,6 +34,7 @@ use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass};
+use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
 use vulkano::swapchain::{
     self, AcquireError, PresentMode, Surface, Swapchain, SwapchainAcquireFuture,
     SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo,
@@ -103,6 +106,9 @@ pub struct Render {
     descriptor_set_allocator: StandardDescriptorSetAllocator,
 
     camera_buffer: Arc<CpuAccessibleBuffer<water_vert::ty::Camera>>,
+
+    simulation: Simulation,
+    texture_sampler: Arc<Sampler>,
 }
 
 impl Render {
@@ -342,6 +348,23 @@ impl Render {
             window.inner_size().width as f32 / window.inner_size().height as f32
         };
 
+        let simulation = Simulation::new(
+            &memory_allocator,
+            device.clone(),
+            queue.queue_family_index(),
+        );
+
+        let texture_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                address_mode: [SamplerAddressMode::Repeat; 3],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
         Render {
             surface,
             device,
@@ -358,9 +381,11 @@ impl Render {
             commands,
             image_index,
             acquire_future,
+            simulation,
 
             camera_buffer,
             aspect_ratio,
+            texture_sampler,
         }
     }
 
@@ -447,7 +472,14 @@ impl Render {
         let geometry_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
             geometry_layout.clone(),
-            [WriteDescriptorSet::buffer(0, self.camera_buffer.clone())],
+            [
+                WriteDescriptorSet::buffer(0, self.camera_buffer.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    1,
+                    self.simulation.spec_h0.clone(),
+                    self.texture_sampler.clone(),
+                ),
+            ],
         )
         .unwrap();
 
@@ -569,6 +601,10 @@ impl Render {
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
+
+        // SEARCH: Compute shaders run here!
+        self.simulation
+            .generate_h0_spectrum(&mut commands, &self.descriptor_set_allocator);
 
         commands
             .begin_render_pass(
