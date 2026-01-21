@@ -1,4 +1,3 @@
-use crate::engine::input::InputManager;
 use nalgebra_glm as glm;
 
 const MOVE_SPEED: f32 = 5.0;
@@ -98,6 +97,7 @@ impl Camera {
         self.is_dirty = false;
     }
 
+    /*
     pub fn tick(&mut self, input: &mut InputManager, delta_time: f64) {
         let dt = delta_time as f32;
 
@@ -124,7 +124,7 @@ impl Camera {
         if delta_x != 0.0 || delta_y != 0.0 {
             self.rotate(delta_x as f32 * ROTATE_SPEED, delta_y as f32 * ROTATE_SPEED);
         }
-    }
+    }*/
 }
 
 impl Camera {
