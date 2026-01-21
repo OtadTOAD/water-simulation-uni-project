@@ -2,12 +2,14 @@ use std::{mem, sync::Arc};
 
 use vulkano::{
     VulkanLibrary,
-    buffer::{BufferUsage, CpuAccessibleBuffer},
+    buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess},
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
         RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
     },
-    descriptor_set::allocator::StandardDescriptorSetAllocator,
+    descriptor_set::{
+        PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
+    },
     device::{
         self, Device, DeviceCreateInfo, Queue, QueueCreateInfo, physical::PhysicalDeviceType,
     },
@@ -15,7 +17,7 @@ use vulkano::{
     image::{AttachmentImage, ImageAccess, SwapchainImage, view::ImageView},
     memory::allocator::StandardMemoryAllocator,
     pipeline::{
-        GraphicsPipeline,
+        GraphicsPipeline, Pipeline, PipelineBindPoint,
         graphics::{
             depth_stencil::DepthStencilState,
             input_assembly::InputAssemblyState,
@@ -36,7 +38,8 @@ use winit::window::{Window, WindowBuilder};
 
 use crate::{
     camera::Camera,
-    instance::{Instance, Vertex},
+    draw_cache::DrawCache,
+    instance::{Instance, Mesh, Vertex},
 };
 
 vulkano::impl_vertex!(Vertex, position, uv);
@@ -61,7 +64,11 @@ mod water_frag {
     }
 }
 
-#[derive(Debug, Clone)]
+fn get_window(surface: &Arc<Surface>) -> &Window {
+    surface.object().unwrap().downcast_ref::<Window>().unwrap()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderStage {
     Stopped,
     Render,
@@ -174,7 +181,7 @@ impl Renderer {
                     .0,
             );
 
-            let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+            let window = get_window(&surface);
             let image_extent: [u32; 2] = window.inner_size().into();
 
             let present_mode = device
@@ -199,14 +206,6 @@ impl Renderer {
             )
             .unwrap()
         };
-
-        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-        let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
-        let command_buffer_allocator =
-            StandardCommandBufferAllocator::new(device.clone(), Default::default());
-
-        let deferred_vert = water_vert::load(device.clone()).unwrap();
-        let deferred_frag = water_frag::load(device.clone()).unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -233,6 +232,8 @@ impl Renderer {
         )
         .unwrap();
 
+        let deferred_vert = water_vert::load(device.clone()).unwrap();
+        let deferred_frag = water_frag::load(device.clone()).unwrap();
         let geometry_pass = Subpass::from(render_pass.clone(), 0).unwrap();
         let geometry_pipeline = GraphicsPipeline::start()
             .vertex_input_state(
@@ -250,6 +251,7 @@ impl Renderer {
             .build(device.clone())
             .unwrap();
 
+        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let mut viewport = Viewport {
             origin: [0.0, 0.0],
             dimensions: [0.0, 0.0],
@@ -278,13 +280,16 @@ impl Renderer {
         )
         .unwrap();
 
-        let render_stage = RenderStage::Stopped;
-        let commands = None;
-        let image_index = 0;
+        let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
+        let command_buffer_allocator =
+            StandardCommandBufferAllocator::new(device.clone(), Default::default());
         let acquire_future = None;
+        let commands = None;
+        let render_stage = RenderStage::Stopped;
+        let image_index = 0;
 
         let aspect_ratio = {
-            let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+            let window = get_window(&surface);
             window.inner_size().width as f32 / window.inner_size().height as f32
         };
 
@@ -311,27 +316,33 @@ impl Renderer {
     }
 
     pub fn window(&self) -> &Window {
-        self.surface
-            .object()
-            .unwrap()
-            .downcast_ref::<Window>()
-            .unwrap()
+        get_window(&self.surface)
     }
 
+    // TODO: This can either be done as multiple smaller buffers
+    // Or just use push constants
     pub fn set_camera(&mut self, camera: &Camera) -> bool {
         match self.camera_buffer.write() {
             Ok(mut content) => {
-                let proj = camera.projection_matrix_raw();
-                let view = camera.view_matrix_raw();
-
                 content.camPos = camera.position.into();
-                content.proj = proj;
-                content.view = view;
+                content.proj = camera.projection_matrix_raw();
+                content.view = camera.view_matrix_raw();
 
                 return true;
             }
             Err(_) => return false,
         }
+    }
+
+    pub fn get_draw_cache(&self, mesh: &Mesh, instances: &Vec<Instance>) -> DrawCache {
+        DrawCache::new(
+            mesh,
+            instances,
+            &self.memory_allocator,
+            &self.descriptor_set_allocator,
+            &self.geometry_pipeline,
+            [WriteDescriptorSet::buffer(0, self.camera_buffer.clone())],
+        )
     }
 
     pub fn recreate_swapchain(&mut self) {
@@ -405,23 +416,31 @@ impl Renderer {
         framebuffers
     }
 
-    pub fn start(&mut self) {
+    fn check_stage(&mut self, expected: RenderStage) -> bool {
+        if self.render_stage == expected {
+            return true;
+        }
+
         match self.render_stage {
-            RenderStage::Stopped => {
-                self.render_stage = RenderStage::Render;
-            }
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();
                 self.render_stage = RenderStage::Stopped;
                 self.commands = None;
-                return;
+                false
             }
             _ => {
                 self.render_stage = RenderStage::Stopped;
                 self.commands = None;
-                return;
+                false
             }
         }
+    }
+
+    pub fn start(&mut self) {
+        if !self.check_stage(RenderStage::Stopped) {
+            return;
+        }
+        self.render_stage = RenderStage::Render;
 
         let (image_index, suboptimal, acquire_future) =
             match swapchain::acquire_next_image(self.swapchain.clone(), None) {
@@ -464,39 +483,35 @@ impl Renderer {
         self.acquire_future = Some(acquire_future);
     }
 
-    pub fn render(&mut self) {
-        match self.render_stage {
-            RenderStage::Render => {}
-            RenderStage::NeedsRedraw => {
-                self.recreate_swapchain();
-                self.render_stage = RenderStage::Stopped;
-                self.commands = None;
-                return;
-            }
-            _ => {
-                self.render_stage = RenderStage::Stopped;
-                self.commands = None;
-                return;
-            }
+    pub fn render(&mut self, draw_cache: &DrawCache) {
+        if !self.check_stage(RenderStage::Render) {
+            return;
         }
 
-        // TODO: add rendering commands here
+        let geometry_set = draw_cache.geometry_set.clone();
+        let vertex_buffer = draw_cache.vertex_buffer.clone();
+        let index_buffer = draw_cache.index_buffer.clone();
+        let inst_buffer = draw_cache.inst_buffer.clone();
+        self.commands
+            .as_mut()
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.geometry_pipeline.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.geometry_pipeline.layout().clone(),
+                0,
+                geometry_set,
+            )
+            .bind_vertex_buffers(0, (vertex_buffer.clone(), inst_buffer.clone()))
+            .bind_index_buffer(index_buffer.clone())
+            .draw_indexed(index_buffer.len() as u32, inst_buffer.len() as u32, 0, 0, 0)
+            .unwrap();
     }
 
     pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
-        match self.render_stage {
-            RenderStage::Render => {}
-            RenderStage::NeedsRedraw => {
-                self.recreate_swapchain();
-                self.commands = None;
-                self.render_stage = RenderStage::Stopped;
-                return;
-            }
-            _ => {
-                self.commands = None;
-                self.render_stage = RenderStage::Stopped;
-                return;
-            }
+        if !self.check_stage(RenderStage::Render) {
+            return;
         }
 
         let mut commands = self.commands.take().unwrap();

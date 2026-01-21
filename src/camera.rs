@@ -1,4 +1,4 @@
-use nalgebra_glm as glm;
+use nalgebra_glm::{self as glm, IVec3};
 
 const MOVE_SPEED: f32 = 5.0;
 const ROTATE_SPEED: f32 = 0.005;
@@ -6,13 +6,14 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
 pub struct Camera {
     pub position: glm::Vec3,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub fov: f32,
+    yaw: f32,
+    pitch: f32,
+    fov: f32,
 
+    aspect_ratio: f32,
     proj: glm::Mat4,
     view: glm::Mat4,
-    pub is_dirty: bool,
+    is_dirty: bool,
 }
 
 impl Camera {
@@ -22,6 +23,7 @@ impl Camera {
             yaw: 0.0,
             pitch: 0.0,
             fov: 70.0_f32.to_radians(),
+            aspect_ratio: 0.0,
             proj: glm::Mat4::identity(),
             view: glm::Mat4::identity(),
             is_dirty: true,
@@ -82,19 +84,57 @@ impl Camera {
         self.is_dirty = true;
     }
 
-    pub fn update_matrices(&mut self, aspect_ratio: f32) {
+    pub fn update_matrices(&mut self) {
         if !self.is_dirty {
             return;
         }
 
         // Perspective projection for Vulkan (reverse Z for better depth precision)
-        self.proj = glm::perspective_fov_rh_zo(self.fov, aspect_ratio, 1.0, 0.1, 1000.0);
+        self.proj = glm::perspective_fov_rh_zo(self.fov, self.aspect_ratio, 1.0, 0.1, 1000.0);
 
         // View matrix: look from position in the direction we're facing
         let target = self.position + self.forward();
         self.view = glm::look_at_rh(&self.position, &target, &glm::Vec3::y());
 
         self.is_dirty = false;
+    }
+
+    pub fn on_mouse_dlta(&mut self, delta_x: f32, delta_y: f32) {
+        self.rotate(delta_x * ROTATE_SPEED, delta_y * ROTATE_SPEED);
+    }
+
+    pub fn tick(&mut self, move_dir: &IVec3, delta_time: f32, aspect_ratio: f32) -> bool {
+        if move_dir.x == 0
+            && move_dir.y == 0
+            && move_dir.z == 0
+            && aspect_ratio != self.aspect_ratio
+        {
+            return false;
+        }
+        self.aspect_ratio = aspect_ratio;
+
+        let dt = delta_time;
+        if move_dir.y > 0 {
+            self.move_forward(MOVE_SPEED * dt);
+        }
+        if move_dir.y < 0 {
+            self.move_backward(MOVE_SPEED * dt);
+        }
+        if move_dir.x < 0 {
+            self.move_left(MOVE_SPEED * dt);
+        }
+        if move_dir.x > 0 {
+            self.move_right(MOVE_SPEED * dt);
+        }
+        if move_dir.z > 0 {
+            self.move_up(MOVE_SPEED * dt);
+        }
+        if move_dir.z < 0 {
+            self.move_down(MOVE_SPEED * dt);
+        }
+
+        self.update_matrices();
+        true
     }
 
     /*

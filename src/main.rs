@@ -1,21 +1,27 @@
 mod camera;
+mod draw_cache;
 mod instance;
 mod renderer;
+mod water;
 
-use nalgebra_glm::Vec3;
+use nalgebra_glm::{IVec3, Vec3};
 use vulkano::sync::{self, GpuFuture};
 use winit::{
-    event::{Event, KeyboardInput, WindowEvent},
+    event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
 };
 
-use crate::{camera::Camera, renderer::Renderer};
+use crate::{camera::Camera, renderer::Renderer, water::Water};
 
 fn main() {
     let event_loop = EventLoop::new();
     let mut renderer = Renderer::new(&event_loop);
 
-    let camera = Camera::new(Vec3::new(-10.0, -1.0, 0.0));
+    let mut camera = Camera::new(Vec3::new(-10.0, -1.0, 0.0));
+    let mut move_dir = IVec3::new(0, 0, 0);
+    let water = Water::new();
+
+    let water_cache = renderer.get_draw_cache(&water.mesh, &water.instances);
 
     let mut previous_frame_end =
         Some(Box::new(sync::now(renderer.device.clone())) as Box<dyn GpuFuture>);
@@ -30,9 +36,54 @@ fn main() {
                         ..
                     },
                 ..
-            } => {
-                println!("Key event: {:?} {:?}", keycode, state);
-            }
+            } => match (keycode, state) {
+                (VirtualKeyCode::Escape, _) => {
+                    *control_flow = ControlFlow::Exit;
+                }
+                (VirtualKeyCode::W, x) => {
+                    if x == ElementState::Pressed {
+                        move_dir.y = 1;
+                    } else {
+                        move_dir.y = 0;
+                    }
+                }
+                (VirtualKeyCode::S, x) => {
+                    if x == ElementState::Pressed {
+                        move_dir.y = -1;
+                    } else {
+                        move_dir.y = 0;
+                    }
+                }
+                (VirtualKeyCode::A, x) => {
+                    if x == ElementState::Pressed {
+                        move_dir.x = -1;
+                    } else {
+                        move_dir.x = 0;
+                    }
+                }
+                (VirtualKeyCode::D, x) => {
+                    if x == ElementState::Pressed {
+                        move_dir.x = 1;
+                    } else {
+                        move_dir.x = 0;
+                    }
+                }
+                (VirtualKeyCode::Space, x) => {
+                    if x == ElementState::Pressed {
+                        move_dir.z = 1;
+                    } else {
+                        move_dir.z = 0;
+                    }
+                }
+                (VirtualKeyCode::LShift, x) => {
+                    if x == ElementState::Pressed {
+                        move_dir.z = -1;
+                    } else {
+                        move_dir.z = 0;
+                    }
+                }
+                _ => {}
+            },
 
             WindowEvent::Focused(focused) => {
                 if focused {
@@ -56,7 +107,7 @@ fn main() {
 
         Event::DeviceEvent { event, .. } => match event {
             winit::event::DeviceEvent::MouseMotion { delta } => {
-                println!("Mouse moved: {:?} {:?}", delta.0, delta.1);
+                camera.on_mouse_dlta(delta.0 as f32, delta.1 as f32);
             }
 
             _ => {}
@@ -79,8 +130,13 @@ fn main() {
                 .unwrap()
                 .cleanup_finished();
 
+            let updated = camera.tick(&move_dir, delta_time, renderer.aspect_ratio);
+            if updated {
+                renderer.set_camera(&camera);
+            }
+
             renderer.start();
-            renderer.render();
+            renderer.render(&water_cache);
             renderer.finish(&mut previous_frame_end);
         }
         _ => (),
