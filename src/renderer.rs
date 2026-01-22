@@ -5,8 +5,7 @@ use vulkano::{
     buffer::TypedBufferAccess,
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
-        PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassContents,
-        allocator::StandardCommandBufferAllocator,
+        RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{WriteDescriptorSet, allocator::StandardDescriptorSetAllocator},
     device::{
@@ -329,28 +328,18 @@ impl Renderer {
     }
 
     pub fn init(&mut self) {
-        let mut commands = AutoCommandBufferBuilder::primary(
+        self.simulation.init(
             &self.command_buffer_allocator,
-            self.queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
-
-        self.simulation.run_h0_spec(
-            &mut commands,
             &self.descriptor_set_allocator,
+            self.queue.clone(),
             self.texture_sampler.clone(),
         );
+    }
 
-        commands
-            .build()
-            .unwrap()
-            .execute(self.queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
+    pub fn run_sim(&mut self, delta_time: f32) {
+        self.simulation.time += delta_time;
+        self.simulation
+            .run(&self.command_buffer_allocator, self.queue.clone());
     }
 
     pub fn window(&self) -> &Window {
@@ -473,30 +462,6 @@ impl Renderer {
         }
     }
 
-    pub fn run_sim(&mut self, delta_time: f32) {
-        self.simulation.time += delta_time;
-
-        let mut commands = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
-            self.queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
-
-        self.simulation
-            .run_ht_spec(&mut commands, &self.descriptor_set_allocator);
-
-        commands
-            .build()
-            .unwrap()
-            .execute(self.queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
-    }
-
     pub fn start(&mut self) {
         if !self.check_stage(RenderStage::Stopped) {
             return;
@@ -518,7 +483,7 @@ impl Renderer {
             return;
         }
 
-        let clear_values = vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1.0.into())];
+        let clear_values = vec![Some([0.1, 0.7, 0.9, 1.0].into()), Some(1.0.into())];
 
         let mut commands = AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,

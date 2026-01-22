@@ -1,0 +1,178 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D WavesData;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D H0K;
+
+layout(set = 0, binding = 2) uniform sampler2D Noise;
+
+struct SpectrumParameters {
+    float scale;
+    float angle;
+    float spreadBlend;
+    float swell;
+    float alpha;
+    float peakOmega;
+    float gamma;
+    float shortWavesFade;
+};
+
+layout(push_constant) uniform PushConstants {
+    uint size;
+    float lengthScale;
+    float cutoffHigh;
+    float cutoffLow;
+    float gravityAcceleration;
+    float depth;
+
+    // Spectrum 1
+    float scale1;
+    float angle1;
+    float spreadBlend1;
+    float swell1;
+    float alpha1;
+    float peakOmega1;
+    float gamma1;
+    float shortWavesFade1;
+
+    // Spectrum 2
+    float scale2;
+    float angle2;
+    float spreadBlend2;
+    float swell2;
+    float alpha2;
+    float peakOmega2;
+    float gamma2;
+    float shortWavesFade2;
+} params;
+
+const float PI = 3.1415926;
+
+float Frequency(float k, float g, float depth) {
+    return sqrt(g * k * tanh(min(k * depth, 20.0)));
+}
+
+float FrequencyDerivative(float k, float g, float depth) {
+    float th = tanh(min(k * depth, 20.0));
+    float ch = cosh(k * depth);
+    return g * (depth * k / (ch * ch) + th) / Frequency(k, g, depth) / 2.0;
+}
+
+float NormalisationFactor(float s) {
+    float s2 = s * s;
+    float s3 = s2 * s;
+    float s4 = s3 * s;
+    if (s < 5.0)
+        return -0.000564 * s4 + 0.00776 * s3 - 0.044 * s2 + 0.192 * s + 0.163;
+    else
+        return -4.80e-08 * s4 + 1.07e-05 * s3 - 9.53e-04 * s2 + 5.90e-02 * s + 3.93e-01;
+}
+
+float DonelanBannerBeta(float x) {
+    if (x < 0.95)
+        return 2.61 * pow(abs(x), 1.3);
+    if (x < 1.6)
+        return 2.28 * pow(abs(x), -1.3);
+    float p = -0.4 + 0.8393 * exp(-0.567 * log(x * x));
+    return pow(10.0, p);
+}
+
+float Cosine2s(float theta, float s) {
+    return NormalisationFactor(s) * pow(abs(cos(0.5 * theta)), 2.0 * s);
+}
+
+float SpreadPower(float omega, float peakOmega) {
+    if (omega > peakOmega) {
+        return 9.77 * pow(abs(omega / peakOmega), -2.5);
+    } else {
+        return 6.97 * pow(abs(omega / peakOmega), 5.0);
+    }
+}
+
+float DirectionSpectrum(float theta, float omega, SpectrumParameters pars) {
+    float s = SpreadPower(omega, pars.peakOmega)
+        + 16.0 * tanh(min(omega / pars.peakOmega, 20.0)) * pars.swell * pars.swell;
+    return mix(2.0 / 3.1415926 * cos(theta) * cos(theta), 
+               Cosine2s(theta - pars.angle, s), 
+               pars.spreadBlend);
+}
+
+float TMACorrection(float omega, float g, float depth) {
+    float omegaH = omega * sqrt(depth / g);
+    if (omegaH <= 1.0)
+        return 0.5 * omegaH * omegaH;
+    if (omegaH < 2.0)
+        return 1.0 - 0.5 * (2.0 - omegaH) * (2.0 - omegaH);
+    return 1.0;
+}
+
+float JONSWAP(float omega, float g, float depth, SpectrumParameters pars) {
+    float sigma;
+    if (omega <= pars.peakOmega)
+        sigma = 0.07;
+    else
+        sigma = 0.09;
+    
+    float r = exp(-(omega - pars.peakOmega) * (omega - pars.peakOmega)
+        / (2.0 * sigma * sigma * pars.peakOmega * pars.peakOmega));
+    
+    float oneOverOmega = 1.0 / omega;
+    float peakOmegaOverOmega = pars.peakOmega / omega;
+    return pars.scale * TMACorrection(omega, g, depth) * pars.alpha * g * g
+        * oneOverOmega * oneOverOmega * oneOverOmega * oneOverOmega * oneOverOmega
+        * exp(-1.25 * peakOmegaOverOmega * peakOmegaOverOmega * peakOmegaOverOmega * peakOmegaOverOmega)
+        * pow(abs(pars.gamma), r);
+}
+
+float ShortWavesFade(float kLength, SpectrumParameters pars) {
+    return exp(-pars.shortWavesFade * pars.shortWavesFade * kLength * kLength);
+}
+
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    
+    if (id.x >= params.size || id.y >= params.size)
+        return;
+    
+    float deltaK = 2.0 * PI / params.lengthScale;
+    int nx = int(id.x) - int(params.size) / 2;
+    int nz = int(id.y) - int(params.size) / 2;
+    vec2 k = vec2(nx, nz) * deltaK;
+    float kLength = length(k);
+    
+    if (kLength <= params.cutoffHigh && kLength >= params.cutoffLow) {
+        float kAngle = atan(k.y, k.x);
+        float omega = Frequency(kLength, params.gravityAcceleration, params.depth);
+        imageStore(WavesData, ivec2(id.xy), vec4(k.x, 1.0 / kLength, k.y, omega));
+        float dOmegadk = FrequencyDerivative(kLength, params.gravityAcceleration, params.depth);
+
+        vec2 noiseValue = texelFetch(Noise, ivec2(id.xy), 0).xy;
+        
+        SpectrumParameters spec1 = SpectrumParameters(
+            params.scale1, params.angle1, params.spreadBlend1, params.swell1,
+            params.alpha1, params.peakOmega1, params.gamma1, params.shortWavesFade1
+        );
+        
+        float spectrum = JONSWAP(omega, params.gravityAcceleration, params.depth, spec1)
+            * DirectionSpectrum(kAngle, omega, spec1) 
+            * ShortWavesFade(kLength, spec1);
+        
+        if (params.scale2 > 0.0) {
+            SpectrumParameters spec2 = SpectrumParameters(
+                params.scale2, params.angle2, params.spreadBlend2, params.swell2,
+                params.alpha2, params.peakOmega2, params.gamma2, params.shortWavesFade2
+            );
+            spectrum += JONSWAP(omega, params.gravityAcceleration, params.depth, spec2)
+                * DirectionSpectrum(kAngle, omega, spec2) 
+                * ShortWavesFade(kLength, spec2);
+        }
+        
+        vec2 h0k = vec2(noiseValue.x, noiseValue.y)
+            * sqrt(2.0 * spectrum * abs(dOmegadk) / kLength * deltaK * deltaK);
+        imageStore(H0K, ivec2(id.xy), vec4(h0k, 0.0, 0.0));
+    } else {
+        imageStore(H0K, ivec2(id.xy), vec4(0.0));
+        imageStore(WavesData, ivec2(id.xy), vec4(k.x, 1.0, k.y, 0.0));
+    }
+}

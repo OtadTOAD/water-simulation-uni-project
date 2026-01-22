@@ -31,7 +31,7 @@ fn main() {
         &water.instances,
         [WriteDescriptorSet::image_view_sampler(
             0,
-            renderer.simulation.spec_ht.clone(),
+            renderer.simulation.spec_h0.clone(),
             renderer.texture_sampler.clone(),
         )],
     );
