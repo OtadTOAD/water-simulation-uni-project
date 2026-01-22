@@ -320,7 +320,7 @@ impl Renderer {
             false,
             water_frag::ty::OceanParams {
                 lengthScale: 30.2,
-                lodScale: 7.13,
+                lodScale: 1.0,
                 sssBase: -0.1,
                 sssScale: 4.8,
             },

@@ -90,12 +90,12 @@ void main() {
     fresnel = clamp(1.0 - fresnel, 0.0, 1.0);
     fresnel = pow5(fresnel);
     
-    // Emission (color with fresnel, but not on foam)
+    // Foam(basically a mask where white is foam and black is water)
     vec3 emission = mix(baseColor * (1.0 - fresnel), vec3(0.0), jacobian);
     
-    // Simple lighting
+    // Dot diffuse light
     float ndotl = max(0.0, dot(worldNormal, material.lightDir));
-    vec3 diffuse = albedo * ndotl;
+    vec3 diffuse = albedo * (0.2 + ndotl * 0.8);
     
     // Specular (simplified Blinn-Phong)
     vec3 halfVec = normalize(viewDir + material.lightDir);
@@ -103,6 +103,5 @@ void main() {
     float specPower = exp2(smoothness * 10.0 + 1.0);
     vec3 specular = vec3(pow(ndoth, specPower)) * smoothness;
     
-    // Final color
     outColor = vec4(diffuse + specular + emission, 1.0);
 }

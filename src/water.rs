@@ -42,7 +42,7 @@ fn create_grid_mesh(res: u32) -> Mesh {
 
 fn create_instance(pos: Vec3) -> Instance {
     let translation = nalgebra_glm::translation(&pos);
-    let scale = nalgebra_glm::scaling(&Vec3::new(125.0, 1.0, 125.0));
+    let scale = nalgebra_glm::scaling(&Vec3::new(200.0, 1.0, 200.0));
     let model = translation * scale;
     let normal = nalgebra_glm::inverse_transpose(scale);
     Instance {

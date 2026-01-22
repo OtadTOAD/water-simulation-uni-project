@@ -296,7 +296,10 @@ impl Simulation {
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
-        let (alpha, peak_omega) = calculate_spectrum_params(0.5, 100000.0, 9.81);
+
+        let wind_speed = 0.5;
+        let (alpha, peak_omega) = calculate_spectrum_params(wind_speed, 100000.0, 9.81);
+
         self.run_compute_shader(
             &mut cmd0,
             descriptor_set_allocator,
