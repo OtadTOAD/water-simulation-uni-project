@@ -1,0 +1,47 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D h0Spectrum;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D htSpectrum;
+
+layout(push_constant) uniform PushConstants {
+    float gravity; // Having gravity in constants for easier tweaking
+    float time;
+} params;
+
+const float PI = 3.14159265359;
+//const float G = 9.81;
+
+vec2 complexMultiplyByExp(vec2 a, float theta) {
+    float cosT = cos(theta);
+    float sinT = sin(theta);
+    return vec2(
+        a.x * cosT - a.y * sinT,// real part
+        a.x * sinT + a.y * cosT // imaginary part
+    );
+}
+
+void main() {
+    ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dimensions = imageSize(h0Spectrum);
+    
+    // R,G = h0(k)(Real and Imaginary)
+    // B,A = h0(-k)* (Real and Imaginary, already conjugated)
+    vec4 h0Data = imageLoad(h0Spectrum, texelCoord);
+    vec2 h0k = h0Data.rg;     // h0(k) - real and imaginary
+    vec2 h0minusk = h0Data.ba;// h0(-k)* - real and imaginary (already conjugated)
+    
+    vec2 k;
+    k.x = (2.0 * PI * (texelCoord.x - dimensions.x / 2.0)) / dimensions.x;
+    k.y = (2.0 * PI * (texelCoord.y - dimensions.y / 2.0)) / dimensions.y;
+        
+    // omega = sqrt(g * |k|)
+    float kLen = length(k);
+    float omega = sqrt(params.gravity * kLen);
+    float phase = omega * params.time;
+    
+    // h(k,t) = h0(k) * e^(i*omega*t) + h0(-k)* * e^(-i*omega*t)
+    vec2 htk = complexMultiplyByExp(h0k, phase) + complexMultiplyByExp(h0minusk, -phase);
+    imageStore(htSpectrum, texelCoord, vec4(htk, 0.0, 0.0));
+}

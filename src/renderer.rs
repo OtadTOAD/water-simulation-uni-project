@@ -473,6 +473,30 @@ impl Renderer {
         }
     }
 
+    pub fn run_sim(&mut self, delta_time: f32) {
+        self.simulation.time += delta_time;
+
+        let mut commands = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        self.simulation
+            .run_ht_spec(&mut commands, &self.descriptor_set_allocator);
+
+        commands
+            .build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+    }
+
     pub fn start(&mut self) {
         if !self.check_stage(RenderStage::Stopped) {
             return;

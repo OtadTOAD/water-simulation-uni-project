@@ -31,7 +31,7 @@ fn main() {
         &water.instances,
         [WriteDescriptorSet::image_view_sampler(
             0,
-            renderer.simulation.spec_h0.clone(),
+            renderer.simulation.spec_ht.clone(),
             renderer.texture_sampler.clone(),
         )],
     );
@@ -136,6 +136,7 @@ fn main() {
             last_frame_time = curr_time;
 
             println!("Frame Rate: {:.2}", 1.0 / delta_time);
+            renderer.run_sim(delta_time);
 
             previous_frame_end
                 .as_mut()
