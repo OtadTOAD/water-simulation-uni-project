@@ -20,11 +20,10 @@ use crate::{camera::Camera, renderer::Renderer, water::Water};
 fn main() {
     let event_loop = EventLoop::new();
     let mut renderer = Renderer::new(&event_loop);
+    renderer.init();
 
-    let mut camera = Camera::new(Vec3::new(-10.0, -1.0, 0.0));
+    let mut camera = Camera::new(Vec3::new(-2.0, -0.5, 0.0));
     let mut move_dir = IVec3::new(0, 0, 0);
-
-    let simulation = renderer.get_simulation();
 
     let water = Water::new();
     let water_cache = renderer.get_draw_cache(
@@ -32,7 +31,7 @@ fn main() {
         &water.instances,
         [WriteDescriptorSet::image_view_sampler(
             0,
-            simulation.noise_image.clone(),
+            renderer.simulation.spec_h0.clone(),
             renderer.texture_sampler.clone(),
         )],
     );

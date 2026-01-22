@@ -5,7 +5,8 @@ use vulkano::{
     buffer::TypedBufferAccess,
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
-        RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
+        PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassContents,
+        allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{WriteDescriptorSet, allocator::StandardDescriptorSetAllocator},
     device::{
@@ -96,6 +97,7 @@ pub struct Renderer {
 
     pub texture_sampler: Arc<Sampler>,
     camera_push: water_vert::ty::Camera,
+    pub simulation: Simulation,
 }
 
 impl Renderer {
@@ -295,6 +297,13 @@ impl Renderer {
         )
         .unwrap();
 
+        let simulation = Simulation::new(
+            &memory_allocator,
+            &queue,
+            &command_buffer_allocator,
+            &device,
+        );
+
         Renderer {
             surface,
             device,
@@ -315,15 +324,33 @@ impl Renderer {
             texture_sampler,
             camera_push,
             aspect_ratio,
+            simulation,
         }
     }
 
-    pub fn get_simulation(&self) -> Simulation {
-        Simulation::new(
-            &self.memory_allocator,
-            &self.queue,
+    pub fn init(&mut self) {
+        let mut commands = AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
         )
+        .unwrap();
+
+        self.simulation.run_h0_spec(
+            &mut commands,
+            &self.descriptor_set_allocator,
+            self.texture_sampler.clone(),
+        );
+
+        commands
+            .build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
     }
 
     pub fn window(&self) -> &Window {
