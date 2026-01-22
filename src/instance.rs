@@ -13,12 +13,6 @@ pub struct Mesh {
     pub indices: Vec<u32>,
 }
 
-impl Mesh {
-    pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
-        Mesh { vertices, indices }
-    }
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Zeroable, Pod)]
 pub struct Instance {

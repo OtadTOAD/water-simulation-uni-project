@@ -5,8 +5,6 @@ mod renderer;
 mod simulation;
 mod water;
 
-use std::fmt::Write;
-
 use nalgebra_glm::{IVec3, Vec3};
 use vulkano::{
     descriptor_set::WriteDescriptorSet,
