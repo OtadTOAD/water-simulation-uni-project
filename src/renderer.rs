@@ -2,14 +2,12 @@ use std::{mem, sync::Arc};
 
 use vulkano::{
     VulkanLibrary,
-    buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess},
+    buffer::TypedBufferAccess,
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
         RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
     },
-    descriptor_set::{
-        PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
-    },
+    descriptor_set::{WriteDescriptorSet, allocator::StandardDescriptorSetAllocator},
     device::{
         self, Device, DeviceCreateInfo, Queue, QueueCreateInfo, physical::PhysicalDeviceType,
     },
@@ -27,6 +25,7 @@ use vulkano::{
         },
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
+    sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo},
     swapchain::{
         self, AcquireError, PresentMode, Surface, Swapchain, SwapchainAcquireFuture,
         SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo,
@@ -40,6 +39,7 @@ use crate::{
     camera::Camera,
     draw_cache::DrawCache,
     instance::{Instance, Mesh, Vertex},
+    simulation::Simulation,
 };
 
 vulkano::impl_vertex!(Vertex, position, uv);
@@ -94,7 +94,8 @@ pub struct Renderer {
     acquire_future: Option<SwapchainAcquireFuture>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
 
-    camera_buffer: Arc<CpuAccessibleBuffer<water_vert::ty::Camera>>,
+    pub texture_sampler: Arc<Sampler>,
+    camera_push: water_vert::ty::Camera,
 }
 
 impl Renderer {
@@ -265,21 +266,6 @@ impl Renderer {
             &mut viewport,
         );
 
-        let camera_buffer = CpuAccessibleBuffer::from_data(
-            &memory_allocator,
-            BufferUsage {
-                uniform_buffer: true,
-                ..BufferUsage::empty()
-            },
-            false,
-            water_vert::ty::Camera {
-                proj: [[0.0; 4]; 4],
-                view: [[0.0; 4]; 4],
-                camPos: [0.0; 3],
-            },
-        )
-        .unwrap();
-
         let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
         let command_buffer_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
@@ -292,6 +278,22 @@ impl Renderer {
             let window = get_window(&surface);
             window.inner_size().width as f32 / window.inner_size().height as f32
         };
+
+        let camera_push = water_vert::ty::Camera {
+            proj: [[0.0; 4]; 4],
+            view: [[0.0; 4]; 4],
+        };
+
+        let texture_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                address_mode: [SamplerAddressMode::Repeat; 3],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         Renderer {
             surface,
@@ -310,9 +312,18 @@ impl Renderer {
             image_index,
             acquire_future,
 
-            camera_buffer,
+            texture_sampler,
+            camera_push,
             aspect_ratio,
         }
+    }
+
+    pub fn get_simulation(&self) -> Simulation {
+        Simulation::new(
+            &self.memory_allocator,
+            &self.queue,
+            &self.command_buffer_allocator,
+        )
     }
 
     pub fn window(&self) -> &Window {
@@ -321,27 +332,26 @@ impl Renderer {
 
     // TODO: This can either be done as multiple smaller buffers
     // Or just use push constants
-    pub fn set_camera(&mut self, camera: &Camera) -> bool {
-        match self.camera_buffer.write() {
-            Ok(mut content) => {
-                content.camPos = camera.position.into();
-                content.proj = camera.projection_matrix_raw();
-                content.view = camera.view_matrix_raw();
-
-                return true;
-            }
-            Err(_) => return false,
-        }
+    pub fn set_camera(&mut self, camera: &Camera) {
+        self.camera_push = water_vert::ty::Camera {
+            proj: camera.projection_matrix_raw(),
+            view: camera.view_matrix_raw(),
+        };
     }
 
-    pub fn get_draw_cache(&self, mesh: &Mesh, instances: &Vec<Instance>) -> DrawCache {
+    pub fn get_draw_cache(
+        &self,
+        mesh: &Mesh,
+        instances: &Vec<Instance>,
+        descriptor_writes: impl IntoIterator<Item = WriteDescriptorSet>,
+    ) -> DrawCache {
         DrawCache::new(
             mesh,
             instances,
             &self.memory_allocator,
             &self.descriptor_set_allocator,
             &self.geometry_pipeline,
-            [WriteDescriptorSet::buffer(0, self.camera_buffer.clone())],
+            descriptor_writes,
         )
     }
 
@@ -497,6 +507,7 @@ impl Renderer {
             .unwrap()
             .set_viewport(0, [self.viewport.clone()])
             .bind_pipeline_graphics(self.geometry_pipeline.clone())
+            .push_constants(self.geometry_pipeline.layout().clone(), 0, self.camera_push)
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
                 self.geometry_pipeline.layout().clone(),

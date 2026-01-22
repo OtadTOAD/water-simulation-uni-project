@@ -27,7 +27,6 @@ impl DrawCache {
         geometry_pipeline: &Arc<GraphicsPipeline>,
         descriptor_writes: impl IntoIterator<Item = WriteDescriptorSet>,
     ) -> Self {
-        let inst_len = instances.len() as u32;
         let inst_buffer = CpuAccessibleBuffer::from_iter(
             memory_allocator,
             BufferUsage {

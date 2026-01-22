@@ -2,10 +2,16 @@ mod camera;
 mod draw_cache;
 mod instance;
 mod renderer;
+mod simulation;
 mod water;
 
+use std::fmt::Write;
+
 use nalgebra_glm::{IVec3, Vec3};
-use vulkano::sync::{self, GpuFuture};
+use vulkano::{
+    descriptor_set::WriteDescriptorSet,
+    sync::{self, GpuFuture},
+};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -19,9 +25,19 @@ fn main() {
 
     let mut camera = Camera::new(Vec3::new(-10.0, -1.0, 0.0));
     let mut move_dir = IVec3::new(0, 0, 0);
-    let water = Water::new();
 
-    let water_cache = renderer.get_draw_cache(&water.mesh, &water.instances);
+    let simulation = renderer.get_simulation();
+
+    let water = Water::new();
+    let water_cache = renderer.get_draw_cache(
+        &water.mesh,
+        &water.instances,
+        [WriteDescriptorSet::image_view_sampler(
+            0,
+            simulation.noise_image.clone(),
+            renderer.texture_sampler.clone(),
+        )],
+    );
 
     let mut previous_frame_end =
         Some(Box::new(sync::now(renderer.device.clone())) as Box<dyn GpuFuture>);
