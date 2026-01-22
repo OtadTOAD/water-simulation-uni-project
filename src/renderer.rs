@@ -2,7 +2,7 @@ use std::{mem, sync::Arc};
 
 use vulkano::{
     VulkanLibrary,
-    buffer::TypedBufferAccess,
+    buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess},
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
         RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
@@ -56,11 +56,15 @@ mod water_vert {
         },
     }
 }
-
 mod water_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/shaders/water.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
     }
 }
 
@@ -93,6 +97,9 @@ pub struct Renderer {
     image_index: u32,
     acquire_future: Option<SwapchainAcquireFuture>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
+
+    pub ocean_params_buffer: Arc<CpuAccessibleBuffer<water_frag::ty::OceanParams>>,
+    pub mat_params_buffer: Arc<CpuAccessibleBuffer<water_frag::ty::MaterialParams>>,
 
     pub texture_sampler: Arc<Sampler>,
     camera_push: water_vert::ty::Camera,
@@ -283,6 +290,7 @@ impl Renderer {
         let camera_push = water_vert::ty::Camera {
             proj: [[0.0; 4]; 4],
             view: [[0.0; 4]; 4],
+            pos: [0.0; 3],
         };
 
         let texture_sampler = Sampler::new(
@@ -303,6 +311,45 @@ impl Renderer {
             &device,
         );
 
+        let ocean_params_buffer = CpuAccessibleBuffer::from_data(
+            &memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            water_frag::ty::OceanParams {
+                lengthScale: 30.2,
+                lodScale: 7.13,
+                sssBase: -0.1,
+                sssScale: 4.8,
+            },
+        )
+        .unwrap();
+        let mat_params_buffer = CpuAccessibleBuffer::from_data(
+            &memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            water_frag::ty::MaterialParams {
+                color: [0.03457636, 0.12297464, 0.1981132, 1.0],
+                foamColor: [1.0, 1.0, 1.0, 1.0],
+                sssColor: [0.1541919, 0.8857628, 0.990566, 1.0],
+                sssStrength: 0.133,
+                roughness: 0.311,
+                roughnessScale: 0.0044,
+                maxGloss: 0.91,
+                foamBias: 0.84,
+                foamScale: 2.4,
+                contactFoam: 1.0,
+                time: 0.0,
+                lightDir: [0.0, 1.0, 0.0],
+            },
+        )
+        .unwrap();
+
         Renderer {
             surface,
             device,
@@ -319,6 +366,9 @@ impl Renderer {
             commands,
             image_index,
             acquire_future,
+
+            ocean_params_buffer,
+            mat_params_buffer,
 
             texture_sampler,
             camera_push,
@@ -338,8 +388,11 @@ impl Renderer {
 
     pub fn run_sim(&mut self, delta_time: f32) {
         self.simulation.time += delta_time;
-        self.simulation
-            .run(&self.command_buffer_allocator, self.queue.clone());
+        self.simulation.run(
+            &self.command_buffer_allocator,
+            &self.descriptor_set_allocator,
+            self.queue.clone(),
+        );
     }
 
     pub fn window(&self) -> &Window {
@@ -352,6 +405,7 @@ impl Renderer {
         self.camera_push = water_vert::ty::Camera {
             proj: camera.projection_matrix_raw(),
             view: camera.view_matrix_raw(),
+            pos: camera.position.into(),
         };
     }
 
@@ -359,7 +413,7 @@ impl Renderer {
         &self,
         mesh: &Mesh,
         instances: &Vec<Instance>,
-        descriptor_writes: impl IntoIterator<Item = WriteDescriptorSet>,
+        descriptor_writes: Vec<impl IntoIterator<Item = WriteDescriptorSet>>,
     ) -> DrawCache {
         DrawCache::new(
             mesh,
@@ -514,7 +568,7 @@ impl Renderer {
             return;
         }
 
-        let geometry_set = draw_cache.geometry_set.clone();
+        let geometry_sets = draw_cache.geometry_sets.clone();
         let vertex_buffer = draw_cache.vertex_buffer.clone();
         let index_buffer = draw_cache.index_buffer.clone();
         let inst_buffer = draw_cache.inst_buffer.clone();
@@ -528,7 +582,7 @@ impl Renderer {
                 PipelineBindPoint::Graphics,
                 self.geometry_pipeline.layout().clone(),
                 0,
-                geometry_set,
+                geometry_sets,
             )
             .bind_vertex_buffers(0, (vertex_buffer.clone(), inst_buffer.clone()))
             .bind_index_buffer(index_buffer.clone())

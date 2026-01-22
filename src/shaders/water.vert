@@ -2,26 +2,46 @@
 
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec2 uv;
-
 layout(location = 2) in mat4 instance_model;
 layout(location = 6) in mat4 instance_normal;
 
-layout(set = 0, binding = 0) uniform sampler2D noise_texture;
+layout(set = 0, binding = 0) uniform sampler2D displacement;
+layout(set = 0, binding = 1) uniform sampler2D derivatives;
+layout(set = 0, binding = 2) uniform sampler2D turbulence;
 
-layout(location = 0) out vec4 out_albedo;
+layout(set = 1, binding = 0) uniform OceanParams {
+    float lengthScale;
+    float lodScale;
+    float sssBase;
+    float sssScale;
+} params;
 
 layout(push_constant) uniform Camera {
     mat4 proj;
     mat4 view;
-    // Pretty sure mat4 is 64 bytes so two mat4 fit in 128 bytes limit
-    // vec3 camPos; Removed cam pos to fit in push_constant size limits(128 bytes)
+    vec3 pos;
 } cam;
 
+layout(location = 0) out vec2 worldUV;
+layout(location = 1) out float lodScale;
+layout(location = 2) out float sssScaleFactor;
+layout(location = 3) out vec3 viewVector;
+layout(location = 4) out vec4 screenPos;
+
 void main() {
-    vec3 noise = texture(noise_texture, uv).rgb;
-
-    vec4 world_pos = instance_model * vec4(position, 1.0);
-    gl_Position    = cam.proj * cam.view * world_pos;
-
-    out_albedo = vec4(noise, 1.0);
+    vec4 worldPos = instance_model * vec4(position, 1.0);
+    worldUV = worldPos.xz;
+    
+    viewVector = cam.pos - worldPos.xyz;
+    float viewDist = length(viewVector);
+    
+    lodScale = min(params.lodScale * params.lengthScale / viewDist, 1.0);
+    
+    vec3 displacementVec = textureLod(displacement, worldUV / params.lengthScale, 0).xyz * lodScale;
+    worldPos.xyz += displacementVec;
+    
+    sssScaleFactor = max(displacementVec.y - params.sssBase, 0.0) / params.sssScale;
+    
+    gl_Position = cam.proj * cam.view * worldPos;
+    screenPos = gl_Position;
 }

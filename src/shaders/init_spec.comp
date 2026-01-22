@@ -131,7 +131,6 @@ float ShortWavesFade(float kLength, SpectrumParameters pars) {
 
 void main() {
     uvec3 id = gl_GlobalInvocationID;
-    
     if (id.x >= params.size || id.y >= params.size)
         return;
     

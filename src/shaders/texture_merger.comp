@@ -1,0 +1,38 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D Displacement;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D Derivatives;
+layout(set = 0, binding = 2, rgba32f) uniform image2D Turbulence;
+
+layout(set = 0, binding = 3, rgba32f) uniform readonly image2D Dx_Dz;
+layout(set = 0, binding = 4, rgba32f) uniform readonly image2D Dy_Dxz;
+layout(set = 0, binding = 5, rgba32f) uniform readonly image2D Dyx_Dyz;
+layout(set = 0, binding = 6, rgba32f) uniform readonly image2D Dxx_Dzz;
+
+layout(push_constant) uniform PushConstants {
+    uint size;
+    float dlt;
+} params;
+
+const float LAMBDA = 1.0;
+
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= params.size || id.y >= params.size)
+        return;
+    
+	vec2 DxDz = imageLoad(Dx_Dz, ivec2(id.xy)).xy;
+	vec2 DyDxz = imageLoad(Dy_Dxz, ivec2(id.xy)).xy;
+	vec2 DyxDyz = imageLoad(Dyx_Dyz, ivec2(id.xy)).xy;
+	vec2 DxxDzz = imageLoad(Dxx_Dzz, ivec2(id.xy)).xy;
+
+    imageStore(Displacement, ivec2(id.xy), vec4(LAMBDA * DxDz.x, DyDxz.x, LAMBDA * DxDz.y, 0.0));
+    imageStore(Derivatives, ivec2(id.xy), vec4(DyxDyz, DxxDzz * LAMBDA));
+
+    float jacobian = (1 + LAMBDA * DxxDzz.x) * (1 + LAMBDA * DxxDzz.y) - LAMBDA * LAMBDA * DyDxz.y * DyDxz.y;
+    float turb = imageLoad(Turbulence, ivec2(id.xy)).x;
+    float newTurb = turb + params.dlt * 0.5 / max(jacobian, 0.5);
+    imageStore(Turbulence, ivec2(id.xy), vec4(min(jacobian, newTurb), 0.0, 0.0, 0.0));
+}

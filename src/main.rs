@@ -25,15 +25,44 @@ fn main() {
     let mut camera = Camera::new(Vec3::new(-2.0, -0.5, 0.0));
     let mut move_dir = IVec3::new(0, 0, 0);
 
+    // TODO: Use multiple cascedes for more detail(Like 3 lower and lower frequency waves stacked)
     let water = Water::new();
     let water_cache = renderer.get_draw_cache(
         &water.mesh,
         &water.instances,
-        [WriteDescriptorSet::image_view_sampler(
-            0,
-            renderer.simulation.spec_h0.clone(),
-            renderer.texture_sampler.clone(),
-        )],
+        vec![
+            vec![
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    renderer.simulation.displacement_map.clone(),
+                    renderer.texture_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    1,
+                    renderer.simulation.derivatives_map.clone(),
+                    renderer.texture_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    2,
+                    renderer.simulation.turbulence_map.clone(),
+                    renderer.texture_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    3,
+                    renderer.simulation.camera_depth_map.clone(),
+                    renderer.texture_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    4,
+                    renderer.simulation.foam_map.clone(),
+                    renderer.texture_sampler.clone(),
+                ),
+            ],
+            vec![
+                WriteDescriptorSet::buffer(0, renderer.ocean_params_buffer.clone()),
+                WriteDescriptorSet::buffer(1, renderer.mat_params_buffer.clone()),
+            ],
+        ],
     );
 
     let mut previous_frame_end =

@@ -1,0 +1,57 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D WavesData;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D H0;
+
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D Dx_Dz;
+layout(set = 0, binding = 3, rgba32f) uniform writeonly image2D Dy_Dxz;
+layout(set = 0, binding = 4, rgba32f) uniform writeonly image2D Dyx_Dyz;
+layout(set = 0, binding = 5, rgba32f) uniform writeonly image2D Dxx_Dzz;
+
+layout(push_constant) uniform PushConstants {
+    uint size;
+    float time;
+} params;
+
+vec2 ComplexMult(vec2 a, vec2 b) {
+    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= params.size || id.y >= params.size)
+        return;
+    
+    vec4 wave = imageLoad(WavesData, ivec2(id.xy));
+    vec4 H0 = imageLoad(H0, ivec2(id.xy));
+
+    float phase = wave.w * params.time;
+    vec2 exponent = vec2(cos(phase), sin(phase));
+	vec2 h = ComplexMult(H0.xy, exponent)
+		+ ComplexMult(H0.zw, vec2(exponent.x, -exponent.y));
+    vec2 ih = vec2(-h.y, h.x); // i * h
+
+	vec2 displacementX = ih * wave.x * wave.y;
+	vec2 displacementY = h;
+	vec2 displacementZ = ih * wave.z * wave.y;
+		 
+	vec2 displacementX_dx = -h * wave.x * wave.x * wave.y;
+	vec2 displacementY_dx = ih * wave.x;
+	vec2 displacementZ_dx = -h * wave.x * wave.z * wave.y;
+		 
+	vec2 displacementY_dz = ih * wave.z;
+	vec2 displacementZ_dz = -h * wave.z * wave.z * wave.y;
+
+
+    vec2 store_Dx_Dz = vec2(displacementX.x - displacementZ.y, displacementX.y + displacementZ.x);
+	vec2 store_Dy_Dxz = vec2(displacementY.x - displacementZ_dx.y, displacementY.y + displacementZ_dx.x);
+	vec2 store_Dyx_Dyz = vec2(displacementY_dx.x - displacementY_dz.y, displacementY_dx.y + displacementY_dz.x);
+	vec2 store_Dxx_Dzz = vec2(displacementX_dx.x - displacementZ_dz.y, displacementX_dx.y + displacementZ_dz.x);
+    
+    imageStore(Dx_Dz, ivec2(id.xy), vec4(store_Dx_Dz, 0.0, 0.0));
+    imageStore(Dy_Dxz, ivec2(id.xy), vec4(store_Dy_Dxz, 0.0, 0.0));
+    imageStore(Dyx_Dyz, ivec2(id.xy), vec4(store_Dyx_Dyz, 0.0, 0.0));
+    imageStore(Dxx_Dzz, ivec2(id.xy), vec4(store_Dxx_Dzz, 0.0, 0.0));
+}

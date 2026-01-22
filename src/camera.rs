@@ -70,7 +70,7 @@ impl Camera {
     }
 
     pub fn move_up(&mut self, distance: f32) {
-        self.position.y -= distance; // Vulkan Y is down
+        self.position.y += distance;
         self.is_dirty = true;
     }
 
@@ -90,7 +90,8 @@ impl Camera {
         }
 
         // Perspective projection for Vulkan (reverse Z for better depth precision)
-        self.proj = glm::perspective_fov_rh_zo(self.fov, self.aspect_ratio, 1.0, 0.1, 1000.0);
+        self.proj = glm::perspective_rh_zo(self.aspect_ratio, self.fov, 0.1, 1000.0);
+        self.proj[(1, 1)] *= -1.0;
 
         // View matrix: look from position in the direction we're facing
         let target = self.position + self.forward();
@@ -100,7 +101,7 @@ impl Camera {
     }
 
     pub fn on_mouse_dlta(&mut self, delta_x: f32, delta_y: f32) {
-        self.rotate(delta_x * ROTATE_SPEED, delta_y * ROTATE_SPEED);
+        self.rotate(delta_x * ROTATE_SPEED, -delta_y * ROTATE_SPEED);
     }
 
     pub fn tick(&mut self, move_dir: &IVec3, delta_time: f32, aspect_ratio: f32) -> bool {

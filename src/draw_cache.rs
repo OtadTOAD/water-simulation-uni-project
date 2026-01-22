@@ -15,7 +15,7 @@ pub struct DrawCache {
     pub vertex_buffer: Arc<CpuAccessibleBuffer<[Vertex]>>,
     pub inst_buffer: Arc<CpuAccessibleBuffer<[Instance]>>,
     pub index_buffer: Arc<CpuAccessibleBuffer<[u32]>>,
-    pub geometry_set: Arc<PersistentDescriptorSet>,
+    pub geometry_sets: Vec<Arc<PersistentDescriptorSet>>,
 }
 
 impl DrawCache {
@@ -25,7 +25,7 @@ impl DrawCache {
         memory_allocator: &StandardMemoryAllocator,
         descriptor_set_allocator: &StandardDescriptorSetAllocator,
         geometry_pipeline: &Arc<GraphicsPipeline>,
-        descriptor_writes: impl IntoIterator<Item = WriteDescriptorSet>,
+        descriptor_writes: Vec<impl IntoIterator<Item = WriteDescriptorSet>>,
     ) -> Self {
         let inst_buffer = CpuAccessibleBuffer::from_iter(
             memory_allocator,
@@ -59,16 +59,24 @@ impl DrawCache {
         )
         .unwrap();
 
-        let geometry_layout = geometry_pipeline.layout().set_layouts().get(0).unwrap();
-        let geometry_set = PersistentDescriptorSet::new(
-            descriptor_set_allocator,
-            geometry_layout.clone(),
-            descriptor_writes,
-        )
-        .unwrap();
+        let mut geometry_sets = Vec::new();
+        for writes in descriptor_writes {
+            let geometry_layout = geometry_pipeline
+                .layout()
+                .set_layouts()
+                .get(geometry_sets.len() as usize)
+                .unwrap();
+            let geometry_set = PersistentDescriptorSet::new(
+                descriptor_set_allocator,
+                geometry_layout.clone(),
+                writes,
+            )
+            .unwrap();
+            geometry_sets.push(geometry_set);
+        }
 
         DrawCache {
-            geometry_set,
+            geometry_sets,
             index_buffer,
             vertex_buffer,
             inst_buffer,
