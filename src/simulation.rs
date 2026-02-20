@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ptr, sync::Arc};
 
 use rand_distr::Distribution;
 use vulkano::{
@@ -65,10 +65,32 @@ mod fft_init_shader {
         },
     }
 }
-mod fft_shader {
+mod fft_inv_horizontal_shader {
     vulkano_shaders::shader! {
         ty: "compute",
-        path: "src/shaders/fast_fourier_transform.comp",
+        path: "src/shaders/fft_inv_horizontal.comp",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+mod fft_inv_vertical_shader {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/shaders/fft_inv_vertical.comp",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+mod fft_permute_shader {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/shaders/fft_permute.comp",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -160,7 +182,9 @@ pub struct Simulation {
     dxx_dzz: Arc<ImageView<StorageImage>>,
 
     fft_init_pipeline: Arc<ComputePipeline>,
-    fft_pipeline: Arc<ComputePipeline>,
+    fft_inv_horizontal_pipeline: Arc<ComputePipeline>,
+    fft_inv_vertical_pipeline: Arc<ComputePipeline>,
+    fft_permute_pipeline: Arc<ComputePipeline>,
 
     init_spec_pipeline: Arc<ComputePipeline>,
     conj_spec_pipeline: Arc<ComputePipeline>,
@@ -211,9 +235,20 @@ impl Simulation {
             device.clone(),
             fft_init_shader::load(device.clone()).expect("Failed to load fft compute shader"),
         );
-        let fft_pipeline = create_pipeline(
+        let fft_inv_horizontal_pipeline = create_pipeline(
             device.clone(),
-            fft_shader::load(device.clone()).expect("Failed to load fft compute shader"),
+            fft_inv_horizontal_shader::load(device.clone())
+                .expect("Failed to load fft inv horizontal compute shader"),
+        );
+        let fft_inv_vertical_pipeline = create_pipeline(
+            device.clone(),
+            fft_inv_vertical_shader::load(device.clone())
+                .expect("Failed to load fft inv vertical compute shader"),
+        );
+        let fft_permute_pipeline = create_pipeline(
+            device.clone(),
+            fft_permute_shader::load(device.clone())
+                .expect("Failed to load fft permute compute shader"),
         );
 
         let texture_merger_pipeline = create_pipeline(
@@ -242,7 +277,9 @@ impl Simulation {
             dxx_dzz,
 
             fft_init_pipeline,
-            fft_pipeline,
+            fft_inv_horizontal_pipeline,
+            fft_inv_vertical_pipeline,
+            fft_permute_pipeline,
 
             init_spec_pipeline,
             conj_spec_pipeline,
@@ -297,7 +334,7 @@ impl Simulation {
         )
         .unwrap();
 
-        let wind_speed = 0.5;
+        let wind_speed = 0.25;
         let (alpha, peak_omega) = calculate_spectrum_params(wind_speed, 100000.0, 9.81);
 
         self.run_compute_shader(
@@ -323,20 +360,19 @@ impl Simulation {
 
                 scale1: 1.0,
                 angle1: (-29.81_f32).to_radians(),
-                spreadBlend1: 1.0,
+                spreadBlend1: 0.95,
                 swell1: 0.198,
                 alpha1: alpha,
                 peakOmega1: peak_omega,
                 gamma1: 3.3,
                 shortWavesFade1: 0.01,
 
-                // This is disabled
-                scale2: 0.0,
-                angle2: 0.0,
-                spreadBlend2: 1.0,
-                swell2: 1.0,
-                alpha2: 0.0081,
-                peakOmega2: 0.831,
+                scale2: 0.5,
+                angle2: (-5.81_f32).to_radians(),
+                spreadBlend2: 0.9,
+                swell2: 0.2,
+                alpha2: alpha,
+                peakOmega2: peak_omega,
                 gamma2: 3.3,
                 shortWavesFade2: 0.01,
             },
@@ -392,14 +428,14 @@ impl Simulation {
         descriptor_set_allocator: &StandardDescriptorSetAllocator,
         queue: Arc<Queue>,
     ) {
-        let mut cmd0 = AutoCommandBufferBuilder::primary(
+        let mut cmd = AutoCommandBufferBuilder::primary(
             cmd_alloc,
             queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
         self.run_compute_shader(
-            &mut cmd0,
+            &mut cmd,
             descriptor_set_allocator,
             self.time_spec_pipeline.clone(),
             vec![
@@ -416,64 +452,32 @@ impl Simulation {
                 time: self.time,
             },
         );
-        cmd0.build()
-            .unwrap()
-            .execute(queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
-
         self.run_ifft_2d(
-            cmd_alloc,
+            &mut cmd,
             descriptor_set_allocator,
-            queue.clone(),
-            true,
-            false,
-            true,
             self.dx_dz.clone(),
             self.buffer.clone(),
         );
         self.run_ifft_2d(
-            cmd_alloc,
+            &mut cmd,
             descriptor_set_allocator,
-            queue.clone(),
-            true,
-            false,
-            true,
             self.dy_dxz.clone(),
             self.buffer.clone(),
         );
         self.run_ifft_2d(
-            cmd_alloc,
+            &mut cmd,
             descriptor_set_allocator,
-            queue.clone(),
-            true,
-            false,
-            true,
             self.dyx_dyz.clone(),
             self.buffer.clone(),
         );
         self.run_ifft_2d(
-            cmd_alloc,
+            &mut cmd,
             descriptor_set_allocator,
-            queue.clone(),
-            true,
-            false,
-            true,
             self.dxx_dzz.clone(),
             self.buffer.clone(),
         );
-
-        let mut cmd1 = AutoCommandBufferBuilder::primary(
-            cmd_alloc,
-            queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
         self.run_compute_shader(
-            &mut cmd1,
+            &mut cmd,
             descriptor_set_allocator,
             self.texture_merger_pipeline.clone(),
             vec![
@@ -491,7 +495,7 @@ impl Simulation {
                 dlt: self.time,
             },
         );
-        cmd1.build()
+        cmd.build()
             .unwrap()
             .execute(queue.clone())
             .unwrap()
@@ -503,72 +507,56 @@ impl Simulation {
 
     fn run_ifft_2d(
         &self,
-        cmd_alloc: &StandardCommandBufferAllocator,
+        mut commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         descriptor_set_allocator: &StandardDescriptorSetAllocator,
-        queue: Arc<Queue>,
-        output_to_input: bool,
-        scale: bool,
-        permute: bool,
         input: Arc<ImageView<StorageImage>>,
         buffer: Arc<ImageView<StorageImage>>,
     ) {
         let log_size = (TEXTURE_SIZE as f32).log2() as u32;
-        let mut ping_pong = 0;
 
-        let mut commands = AutoCommandBufferBuilder::primary(
-            cmd_alloc,
-            queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
+        let mut buffer0 = &input;
+        let mut buffer1 = &buffer;
 
         for i in 0..log_size {
-            ping_pong ^= 1;
-
             self.run_compute_shader(
-                &mut commands,
+                commands,
                 descriptor_set_allocator,
-                self.fft_pipeline.clone(),
+                self.fft_inv_horizontal_pipeline.clone(),
                 vec![
                     WriteDescriptorSet::image_view(0, self.precomputed_data.clone()),
-                    WriteDescriptorSet::image_view(1, input.clone()),
-                    WriteDescriptorSet::image_view(2, buffer.clone()),
+                    WriteDescriptorSet::image_view(1, buffer0.clone()),
+                    WriteDescriptorSet::image_view(2, buffer1.clone()),
                 ],
-                fft_shader::ty::PushConstants {
+                fft_inv_horizontal_shader::ty::PushConstants {
                     size: TEXTURE_SIZE,
                     stage: i,
-                    ping_pong,
-                    mode: 2, // Inverse Horizontal pass
                 },
             );
 
-            commands.dispatch(WORKGROUP_SIZE).unwrap();
+            std::mem::swap(&mut buffer0, &mut buffer1);
         }
 
         for i in 0..log_size {
-            ping_pong ^= 1;
-
             self.run_compute_shader(
                 &mut commands,
                 descriptor_set_allocator,
-                self.fft_pipeline.clone(),
+                self.fft_inv_vertical_pipeline.clone(),
                 vec![
                     WriteDescriptorSet::image_view(0, self.precomputed_data.clone()),
-                    WriteDescriptorSet::image_view(1, input.clone()),
-                    WriteDescriptorSet::image_view(2, buffer.clone()),
+                    WriteDescriptorSet::image_view(1, buffer0.clone()),
+                    WriteDescriptorSet::image_view(2, buffer1.clone()),
                 ],
-                fft_shader::ty::PushConstants {
+                fft_inv_vertical_shader::ty::PushConstants {
                     size: TEXTURE_SIZE,
                     stage: i,
-                    ping_pong,
-                    mode: 3, // Inverse Vertical pass
                 },
             );
 
-            commands.dispatch(WORKGROUP_SIZE).unwrap();
+            std::mem::swap(&mut buffer0, &mut buffer1);
         }
 
-        if ping_pong == 1 && output_to_input {
+        // Make sure the result is in the input buffer
+        if ptr::eq(buffer1, &input) {
             commands
                 .copy_image(CopyImageInfo::images(
                     buffer.image().clone(),
@@ -576,61 +564,14 @@ impl Simulation {
                 ))
                 .unwrap();
         }
-        if ping_pong == 0 && !output_to_input {
-            commands
-                .copy_image(CopyImageInfo::images(
-                    input.image().clone(),
-                    buffer.image().clone(),
-                ))
-                .unwrap();
-        }
 
-        if permute {
-            self.run_compute_shader(
-                &mut commands,
-                descriptor_set_allocator,
-                self.fft_pipeline.clone(),
-                vec![
-                    WriteDescriptorSet::image_view(0, self.precomputed_data.clone()),
-                    WriteDescriptorSet::image_view(1, input.clone()),
-                    WriteDescriptorSet::image_view(2, buffer.clone()),
-                ],
-                fft_shader::ty::PushConstants {
-                    size: TEXTURE_SIZE,
-                    stage: 0,
-                    ping_pong,
-                    mode: 5, // Permute pass
-                },
-            );
-        }
-        if scale {
-            self.run_compute_shader(
-                &mut commands,
-                descriptor_set_allocator,
-                self.fft_pipeline.clone(),
-                vec![
-                    WriteDescriptorSet::image_view(0, self.precomputed_data.clone()),
-                    WriteDescriptorSet::image_view(1, input.clone()),
-                    WriteDescriptorSet::image_view(2, buffer.clone()),
-                ],
-                fft_shader::ty::PushConstants {
-                    size: TEXTURE_SIZE,
-                    stage: 0,
-                    ping_pong,
-                    mode: 4, // Scale pass
-                },
-            );
-        }
-
-        commands
-            .build()
-            .unwrap()
-            .execute(queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
+        self.run_compute_shader(
+            &mut commands,
+            descriptor_set_allocator,
+            self.fft_permute_pipeline.clone(),
+            vec![WriteDescriptorSet::image_view(0, input.clone())],
+            fft_permute_shader::ty::PushConstants { size: TEXTURE_SIZE },
+        );
     }
 
     fn generate_noise_texture(

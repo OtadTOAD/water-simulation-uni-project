@@ -1,0 +1,19 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform image2D Buffer0;
+
+layout(push_constant) uniform PushConstants {
+    uint size;
+} params;
+
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= params.size || id.y >= params.size)
+        return;
+    
+    vec4 value = imageLoad(Buffer0, ivec2(id.xy));
+    value = value * (1.0 - 2.0 * float((id.x + id.y) % 2u));
+    imageStore(Buffer0, ivec2(id.xy), value);
+}

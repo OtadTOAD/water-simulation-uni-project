@@ -2,6 +2,8 @@ use nalgebra_glm::Vec3;
 
 use crate::instance::{Instance, Mesh};
 
+const GRID_SIZE: f32 = 100.0;
+
 // Make sure res is power of 2 for best results
 fn create_grid_mesh(res: u32) -> Mesh {
     let mut vertices = Vec::new();
@@ -42,7 +44,7 @@ fn create_grid_mesh(res: u32) -> Mesh {
 
 fn create_instance(pos: Vec3) -> Instance {
     let translation = nalgebra_glm::translation(&pos);
-    let scale = nalgebra_glm::scaling(&Vec3::new(200.0, 1.0, 200.0));
+    let scale = nalgebra_glm::scaling(&Vec3::new(GRID_SIZE, 1.0, GRID_SIZE));
     let model = translation * scale;
     let normal = nalgebra_glm::inverse_transpose(scale);
     Instance {
