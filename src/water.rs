@@ -4,7 +4,7 @@ use crate::instance::{Instance, Mesh};
 
 const TILE_RES: u32 = 64;
 const BASE_TILE_SIZE: f32 = 16.0;
-const LODS: u32 = 6;
+const LODS: u32 = 9;
 const TILES_PER_SIDE: i32 = 6;
 const MORPH_REGION: f32 = 0.75;
 

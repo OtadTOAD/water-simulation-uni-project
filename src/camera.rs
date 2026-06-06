@@ -90,7 +90,7 @@ impl Camera {
         }
 
         // Perspective projection for Vulkan (reverse Z for better depth precision)
-        self.proj = glm::perspective_rh_zo(self.aspect_ratio, self.fov, 0.1, 1000.0);
+        self.proj = glm::perspective_rh_zo(self.aspect_ratio, self.fov, 0.1, 15000.0);
         self.proj[(1, 1)] *= -1.0;
 
         // View matrix: look from position in the direction we're facing
