@@ -110,7 +110,7 @@ mod texture_merger_shader {
     }
 }
 
-pub const TEXTURE_SIZE: u32 = 1024;
+pub const TEXTURE_SIZE: u32 = 512;
 const WORKGROUP_SIZE: [u32; 3] = [TEXTURE_SIZE / 8, TEXTURE_SIZE / 8, 1];
 
 fn generate_gaussian_noise(size: u32) -> Vec<[f32; 4]> {
@@ -544,7 +544,8 @@ impl Simulation {
                 );
             }
             for stage in 0..log_size {
-                let set = if stage % 2 == 0 { &target.v_even } else { &target.v_odd };
+                // If you don't continue it, data ends up in wrong buffer
+                let set = if (stage + log_size) % 2 == 0 { &target.v_even } else { &target.v_odd };
                 Self::dispatch(
                     cmd,
                     &self.fft_inv_vertical_pipeline,

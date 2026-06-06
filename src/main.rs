@@ -26,8 +26,8 @@ fn main() {
     let mut move_dir = IVec3::new(0, 0, 0);
 
     // TODO: Use multiple cascedes for more detail(Like 3 lower and lower frequency waves stacked)
-    let water = Water::new();
-    let water_cache = renderer.get_draw_cache(
+    let mut water = Water::new();
+    let mut water_cache = renderer.get_draw_cache(
         &water.mesh,
         &water.instances,
         vec![
@@ -176,6 +176,10 @@ fn main() {
             let updated = camera.tick(&move_dir, delta_time, renderer.aspect_ratio);
             if updated {
                 renderer.set_camera(&camera);
+            }
+
+            if water.update(camera.position) {
+                renderer.update_instances(&mut water_cache, &water.instances);
             }
 
             renderer.start();

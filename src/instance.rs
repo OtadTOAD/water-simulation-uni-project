@@ -18,4 +18,5 @@ pub struct Mesh {
 pub struct Instance {
     pub instance_normal: [[f32; 4]; 4],
     pub instance_model: [[f32; 4]; 4],
+    pub lod_morph: [f32; 4],
 }

@@ -82,4 +82,21 @@ impl DrawCache {
             inst_buffer,
         }
     }
+
+    pub fn update_instances(
+        &mut self,
+        memory_allocator: &StandardMemoryAllocator,
+        instances: &[Instance],
+    ) {
+        self.inst_buffer = CpuAccessibleBuffer::from_iter(
+            memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            instances.iter().cloned(),
+        )
+        .unwrap();
+    }
 }

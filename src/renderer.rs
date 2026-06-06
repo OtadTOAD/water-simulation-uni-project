@@ -42,7 +42,7 @@ use crate::{
 };
 
 vulkano::impl_vertex!(Vertex, position, uv);
-vulkano::impl_vertex!(Instance, instance_model, instance_normal);
+vulkano::impl_vertex!(Instance, instance_model, instance_normal, lod_morph);
 
 mod water_vert {
     vulkano_shaders::shader! {
@@ -468,6 +468,10 @@ impl Renderer {
             &self.geometry_pipeline,
             descriptor_writes,
         )
+    }
+
+    pub fn update_instances(&self, cache: &mut DrawCache, instances: &[Instance]) {
+        cache.update_instances(&self.memory_allocator, instances);
     }
 
     pub fn recreate_swapchain(&mut self) {
