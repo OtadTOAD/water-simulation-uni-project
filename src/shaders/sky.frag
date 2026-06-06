@@ -15,8 +15,10 @@ vec2 equirectUV(vec3 dir) {
     );
 }
 
+const float SKY_EXPOSURE = 0.05;
 vec3 tonemap(vec3 c) {
     // Reinhard tonemap + gamma correction for the HDR sky.
+    c *= SKY_EXPOSURE;
     c = c / (c + vec3(1.0));
     return pow(c, vec3(1.0 / 2.2));
 }

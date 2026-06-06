@@ -52,8 +52,13 @@ vec2 equirectUV(vec3 dir) {
     );
 }
 
+// Must match SKY_EXPOSURE in sky.frag
+const float SKY_EXPOSURE = 0.05;
+// Ambient light level for the water's own (non-reflected) shading.
+const float WATER_LIGHT = 0.5;
+
 vec3 sampleSky(vec3 dir, float lod) {
-    vec3 c = textureLod(skyTexture, equirectUV(dir), lod).rgb;
+    vec3 c = textureLod(skyTexture, equirectUV(dir), lod).rgb * SKY_EXPOSURE;
     c = c / (c + vec3(1.0));
     return pow(c, vec3(1.0 / 2.2));
 }
@@ -122,17 +127,19 @@ void main() {
     vec3 skyReflection = sampleSky(reflDir, 0.0);
 
     // Blend the deep-water body colour (with SSS tint) and the reflected sky.
-    vec3 surface = mix(baseColor, skyReflection, fresnel);
+    // The body colour is dimmed to the night ambient; the reflection already
+    // carries the sky's own (dark) brightness.
+    vec3 surface = mix(baseColor * WATER_LIGHT, skyReflection, fresnel);
 
     // Specular sun highlight (simplified Blinn-Phong).
     vec3 halfVec = normalize(viewDir + material.lightDir);
     float ndoth = max(0.0, dot(worldNormal, halfVec));
     float specPower = exp2(smoothness * 10.0 + 1.0);
-    vec3 specular = vec3(pow(ndoth, specPower)) * smoothness;
+    vec3 specular = vec3(pow(ndoth, specPower)) * smoothness * WATER_LIGHT;
 
     // Foam sits on top as a simple diffuse-lit layer.
     float ndotl = max(0.0, dot(worldNormal, material.lightDir));
-    vec3 foamLit = material.foamColor.rgb * (0.3 + ndotl * 0.7);
+    vec3 foamLit = material.foamColor.rgb * (0.3 + ndotl * 0.7) * WATER_LIGHT;
 
     vec3 color = mix(surface + specular, foamLit, jacobian);
 
