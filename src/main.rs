@@ -57,6 +57,11 @@ fn main() {
                     renderer.simulation.foam_map.clone(),
                     renderer.texture_sampler.clone(),
                 ),
+                WriteDescriptorSet::image_view_sampler(
+                    5,
+                    renderer.sky_image.clone(),
+                    renderer.sky_sampler.clone(),
+                ),
             ],
             vec![
                 WriteDescriptorSet::buffer(0, renderer.ocean_params_buffer.clone()),

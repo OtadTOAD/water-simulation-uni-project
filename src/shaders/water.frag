@@ -11,6 +11,7 @@ layout(set = 0, binding = 1) uniform sampler2D derivatives;
 layout(set = 0, binding = 2) uniform sampler2D turbulence;
 layout(set = 0, binding = 3) uniform sampler2D cameraDepthTexture;
 layout(set = 0, binding = 4) uniform sampler2D foamTexture;
+layout(set = 0, binding = 5) uniform sampler2D skyTexture;
 
 layout(set = 1, binding = 0) uniform OceanParams {
     float lengthScale;
@@ -36,8 +37,23 @@ layout(set = 1, binding = 1) uniform MaterialParams {
 
 layout(location = 0) out vec4 outColor;
 
+const float PI = 3.14159265359;
+
 float pow5(float f) {
     return f * f * f * f * f;
+}
+
+vec2 equirectUV(vec3 dir) {
+    return vec2(
+        atan(dir.z, dir.x) / (2.0 * PI) + 0.5,
+        acos(clamp(dir.y, -1.0, 1.0)) / PI
+    );
+}
+
+vec3 sampleSky(vec3 dir, float lod) {
+    vec3 c = textureLod(skyTexture, equirectUV(dir), lod).rgb;
+    c = c / (c + vec3(1.0));
+    return pow(c, vec3(1.0 / 2.2));
 }
 
 float linearEyeDepth(float depth) {
@@ -68,9 +84,6 @@ void main() {
     float foam = texture(foamTexture, worldUV * 0.5 + material.time).r;
     jacobian += material.contactFoam * clamp(max(0.0, foam - depthDifference) * 5.0, 0.0, 1.0) * 0.9;
     
-    // Albedo (base color with foam)
-    vec3 albedo = mix(vec3(0.0), material.foamColor.rgb, jacobian);
-    
     // Smoothness/roughness calculation
     float distanceGloss = mix(
         1.0 - material.roughness,
@@ -85,23 +98,30 @@ void main() {
     float viewDotH = pow5(clamp(dot(viewDir, -H), 0.0, 1.0)) * 30.0 * material.sssStrength;
     vec3 baseColor = clamp(material.color.rgb + material.sssColor.rgb * viewDotH * sssScaleFactor, 0.0, 1.0);
     
-    // Fresnel
-    float fresnel = dot(worldNormal, viewDir);
-    fresnel = clamp(1.0 - fresnel, 0.0, 1.0);
-    fresnel = pow5(fresnel);
-    
-    // Foam(basically a mask where white is foam and black is water)
-    vec3 emission = mix(baseColor * (1.0 - fresnel), vec3(0.0), jacobian);
-    
-    // Dot diffuse light
-    float ndotl = max(0.0, dot(worldNormal, material.lightDir));
-    vec3 diffuse = albedo * (0.2 + ndotl * 0.8);
-    
-    // Specular (simplified Blinn-Phong)
+    // Fresnel (Schlick) water has a low base reflectance (~0.02).
+    float ndotv = max(dot(worldNormal, viewDir), 0.0);
+    float fresnel = 0.02 + 0.98 * pow5(1.0 - ndotv);
+
+    // Reflect the sky environment off the surface. Fold the ray back up so
+    // grazing reflections never sample the (empty) lower hemisphere.
+    vec3 reflDir = reflect(-viewDir, worldNormal);
+    reflDir.y = abs(reflDir.y);
+    vec3 skyReflection = sampleSky(reflDir, 0.0);
+
+    // Blend the deep-water body colour (with SSS tint) and the reflected sky.
+    vec3 surface = mix(baseColor, skyReflection, fresnel);
+
+    // Specular sun highlight (simplified Blinn-Phong).
     vec3 halfVec = normalize(viewDir + material.lightDir);
     float ndoth = max(0.0, dot(worldNormal, halfVec));
     float specPower = exp2(smoothness * 10.0 + 1.0);
     vec3 specular = vec3(pow(ndoth, specPower)) * smoothness;
-    
-    outColor = vec4(diffuse + specular + emission, 1.0);
+
+    // Foam sits on top as a simple diffuse-lit layer.
+    float ndotl = max(0.0, dot(worldNormal, material.lightDir));
+    vec3 foamLit = material.foamColor.rgb * (0.3 + ndotl * 0.7);
+
+    vec3 color = mix(surface + specular, foamLit, jacobian);
+
+    outColor = vec4(color, 1.0);
 }

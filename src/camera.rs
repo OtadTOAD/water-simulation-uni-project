@@ -178,4 +178,8 @@ impl Camera {
         //glm::transpose(&self.proj).into()
         self.proj.into()
     }
+
+    pub fn inv_view_proj_raw(&self) -> [[f32; 4]; 4] {
+        glm::inverse(&(self.proj * self.view)).into()
+    }
 }

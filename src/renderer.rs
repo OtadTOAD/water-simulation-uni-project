@@ -5,14 +5,20 @@ use vulkano::{
     buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess},
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
-        RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
+        PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassContents,
+        allocator::StandardCommandBufferAllocator,
     },
-    descriptor_set::{WriteDescriptorSet, allocator::StandardDescriptorSetAllocator},
+    descriptor_set::{
+        PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
+    },
     device::{
         self, Device, DeviceCreateInfo, Queue, QueueCreateInfo, physical::PhysicalDeviceType,
     },
     format::Format,
-    image::{AttachmentImage, ImageAccess, SwapchainImage, view::ImageView},
+    image::{
+        AttachmentImage, ImageAccess, ImageDimensions, ImmutableImage, MipmapsCount,
+        SwapchainImage, view::ImageView,
+    },
     memory::allocator::StandardMemoryAllocator,
     pipeline::{
         GraphicsPipeline, Pipeline, PipelineBindPoint,
@@ -64,6 +70,23 @@ mod water_frag {
 
             #[derive(Clone, Copy, Zeroable, Pod)]
         },
+    }
+}
+mod sky_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/shaders/sky.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+mod sky_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/sky.frag",
     }
 }
 
@@ -124,6 +147,68 @@ fn create_surface(
     }
 }
 
+fn load_sky_texture(
+    allocator: &StandardMemoryAllocator,
+    queue: &Arc<Queue>,
+    command_buffer_allocator: &StandardCommandBufferAllocator,
+) -> Arc<ImageView<ImmutableImage>> {
+    use exr::prelude::*;
+
+    // Read the equirectangular HDR sky into a flat RGBA32F buffer.
+    let image = read_first_rgba_layer_from_file(
+        "assets/puresky.exr",
+        |resolution: Vec2<usize>, _| -> (usize, Vec<[f32; 4]>) {
+            (
+                resolution.width(),
+                vec![[0.0, 0.0, 0.0, 1.0]; resolution.width() * resolution.height()],
+            )
+        },
+        |(width, pixels): &mut (usize, Vec<[f32; 4]>),
+         position: Vec2<usize>,
+         (r, g, b, a): (f32, f32, f32, f32)| {
+            let idx = position.y() * *width + position.x();
+            pixels[idx] = [r, g, b, a];
+        },
+    )
+    .expect("Failed to read assets/puresky.exr");
+
+    let (width, pixels) = image.layer_data.channel_data.pixels;
+    let height = pixels.len() / width;
+
+    let mut uploader = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator,
+        queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    let sky_image = ImmutableImage::from_iter(
+        allocator,
+        pixels,
+        ImageDimensions::Dim2d {
+            width: width as u32,
+            height: height as u32,
+            array_layers: 1,
+        },
+        MipmapsCount::One,
+        Format::R32G32B32A32_SFLOAT,
+        &mut uploader,
+    )
+    .unwrap();
+
+    uploader
+        .build()
+        .unwrap()
+        .execute(queue.clone())
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    ImageView::new_default(sky_image).unwrap()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderStage {
     Stopped,
@@ -142,6 +227,9 @@ pub struct Renderer {
     command_buffer_allocator: StandardCommandBufferAllocator,
     render_pass: Arc<RenderPass>,
     geometry_pipeline: Arc<GraphicsPipeline>,
+    sky_pipeline: Arc<GraphicsPipeline>,
+    sky_set: Arc<PersistentDescriptorSet>,
+    sky_push: sky_vert::ty::SkyCamera,
     viewport: Viewport,
     framebuffers: Vec<Arc<Framebuffer>>,
     render_stage: RenderStage,
@@ -154,6 +242,8 @@ pub struct Renderer {
     pub mat_params_buffer: Arc<CpuAccessibleBuffer<water_frag::ty::MaterialParams>>,
 
     pub texture_sampler: Arc<Sampler>,
+    pub sky_image: Arc<ImageView<ImmutableImage>>,
+    pub sky_sampler: Arc<Sampler>,
     camera_push: water_vert::ty::Camera,
     pub simulation: Simulation,
 }
@@ -310,6 +400,19 @@ impl Renderer {
             .build(device.clone())
             .unwrap();
 
+        let sky_vert_shader = sky_vert::load(device.clone()).unwrap();
+        let sky_frag_shader = sky_frag::load(device.clone()).unwrap();
+        let sky_pipeline = GraphicsPipeline::start()
+            .vertex_shader(sky_vert_shader.entry_point("main").unwrap(), ())
+            .input_assembly_state(InputAssemblyState::new())
+            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+            .fragment_shader(sky_frag_shader.entry_point("main").unwrap(), ())
+            .depth_stencil_state(DepthStencilState::disabled())
+            .rasterization_state(RasterizationState::new().cull_mode(CullMode::None))
+            .render_pass(geometry_pass.clone())
+            .build(device.clone())
+            .unwrap();
+
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let mut viewport = Viewport {
             origin: [0.0, 0.0],
@@ -353,6 +456,38 @@ impl Renderer {
             },
         )
         .unwrap();
+
+        let sky_image = load_sky_texture(&memory_allocator, &queue, &command_buffer_allocator);
+        let sky_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                address_mode: [
+                    SamplerAddressMode::Repeat,      // longitude wraps around
+                    SamplerAddressMode::ClampToEdge, // latitude clamps at the poles
+                    SamplerAddressMode::ClampToEdge,
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let sky_set = PersistentDescriptorSet::new(
+            &descriptor_set_allocator,
+            sky_pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            [WriteDescriptorSet::image_view_sampler(
+                0,
+                sky_image.clone(),
+                sky_sampler.clone(),
+            )],
+        )
+        .unwrap();
+
+        let sky_push = sky_vert::ty::SkyCamera {
+            invViewProj: [[0.0; 4]; 4],
+            pos: [0.0; 3],
+        };
 
         let simulation = Simulation::new(
             &memory_allocator,
@@ -410,6 +545,9 @@ impl Renderer {
             command_buffer_allocator,
             render_pass,
             geometry_pipeline,
+            sky_pipeline,
+            sky_set,
+            sky_push,
             viewport,
             framebuffers,
             render_stage,
@@ -421,6 +559,8 @@ impl Renderer {
             mat_params_buffer,
 
             texture_sampler,
+            sky_image,
+            sky_sampler,
             camera_push,
             aspect_ratio,
             simulation,
@@ -450,6 +590,10 @@ impl Renderer {
         self.camera_push = water_vert::ty::Camera {
             proj: camera.projection_matrix_raw(),
             view: camera.view_matrix_raw(),
+            pos: camera.position.into(),
+        };
+        self.sky_push = sky_vert::ty::SkyCamera {
+            invViewProj: camera.inv_view_proj_raw(),
             pos: camera.position.into(),
         };
     }
@@ -607,6 +751,19 @@ impl Renderer {
                 },
                 SubpassContents::Inline,
             )
+            .unwrap();
+
+        commands
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.sky_pipeline.clone())
+            .push_constants(self.sky_pipeline.layout().clone(), 0, self.sky_push)
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.sky_pipeline.layout().clone(),
+                0,
+                self.sky_set.clone(),
+            )
+            .draw(3, 1, 0, 0)
             .unwrap();
 
         self.commands = Some(commands);

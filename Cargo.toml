@@ -21,3 +21,4 @@ winit = { version = "0.27.3", default-features = false, features = [
 
 rand = "0.9.2"
 rand_distr = "0.5.1"
+exr = "1.74"
