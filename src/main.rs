@@ -5,9 +5,12 @@ mod renderer;
 mod simulation;
 mod water;
 
+use std::sync::Arc;
+
 use nalgebra_glm::{IVec3, Vec3};
 use vulkano::{
     descriptor_set::WriteDescriptorSet,
+    image::ImageViewAbstract,
     sync::{self, GpuFuture},
 };
 use winit::{
@@ -22,30 +25,44 @@ fn main() {
     let mut renderer = Renderer::new(&event_loop);
     renderer.init();
 
-    let mut camera = Camera::new(Vec3::new(-2.0, -0.5, 0.0));
+    let mut camera = Camera::new(Vec3::new(-2.0, 15.0, 0.0));
     let mut move_dir = IVec3::new(0, 0, 0);
 
-    // TODO: Use multiple cascedes for more detail(Like 3 lower and lower frequency waves stacked)
     let mut water = Water::new();
     let mut water_cache = renderer.get_draw_cache(
         &water.mesh,
         &water.instances,
         vec![
             vec![
-                WriteDescriptorSet::image_view_sampler(
+                WriteDescriptorSet::image_view_sampler_array(
                     0,
-                    renderer.simulation.displacement_map.clone(),
-                    renderer.texture_sampler.clone(),
+                    0,
+                    renderer.simulation.displacement_map.iter().map(|view| {
+                        (
+                            view.clone() as Arc<dyn ImageViewAbstract>,
+                            renderer.texture_sampler.clone(),
+                        )
+                    }),
                 ),
-                WriteDescriptorSet::image_view_sampler(
+                WriteDescriptorSet::image_view_sampler_array(
                     1,
-                    renderer.simulation.derivatives_map.clone(),
-                    renderer.texture_sampler.clone(),
+                    0,
+                    renderer.simulation.derivatives_map.iter().map(|view| {
+                        (
+                            view.clone() as Arc<dyn ImageViewAbstract>,
+                            renderer.texture_sampler.clone(),
+                        )
+                    }),
                 ),
-                WriteDescriptorSet::image_view_sampler(
+                WriteDescriptorSet::image_view_sampler_array(
                     2,
-                    renderer.simulation.turbulence_map.clone(),
-                    renderer.texture_sampler.clone(),
+                    0,
+                    renderer.simulation.turbulence_map.iter().map(|view| {
+                        (
+                            view.clone() as Arc<dyn ImageViewAbstract>,
+                            renderer.texture_sampler.clone(),
+                        )
+                    }),
                 ),
                 WriteDescriptorSet::image_view_sampler(
                     3,

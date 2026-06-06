@@ -113,6 +113,26 @@ mod texture_merger_shader {
 pub const TEXTURE_SIZE: u32 = 512;
 const WORKGROUP_SIZE: [u32; 3] = [TEXTURE_SIZE / 8, TEXTURE_SIZE / 8, 1];
 
+pub const CASCADE_COUNT: usize = 3;
+pub const CASCADE_LENGTH_SCALES: [f32; CASCADE_COUNT] = [250.0, 17.0, 5.0];
+
+fn cascade_cutoffs() -> [(f32, f32); CASCADE_COUNT] {
+    let boundary = |length_scale: f32| 2.0 * std::f32::consts::PI / length_scale * 6.0;
+    std::array::from_fn(|c| {
+        let low = if c == 0 {
+            0.0001
+        } else {
+            boundary(CASCADE_LENGTH_SCALES[c])
+        };
+        let high = if c == CASCADE_COUNT - 1 {
+            9999.0
+        } else {
+            boundary(CASCADE_LENGTH_SCALES[c + 1])
+        };
+        (low, high)
+    })
+}
+
 fn generate_gaussian_noise(size: u32) -> Vec<[f32; 4]> {
     let mut rng = rand::rng();
     let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
@@ -171,20 +191,20 @@ struct IfftSets {
 }
 
 struct RunSets {
-    time_spec: Arc<PersistentDescriptorSet>,
+    time_spec: [Arc<PersistentDescriptorSet>; CASCADE_COUNT],
     ifft: [IfftSets; 4],
-    merger: Arc<PersistentDescriptorSet>,
+    merger: [Arc<PersistentDescriptorSet>; CASCADE_COUNT],
 }
 
 pub struct Simulation {
     pub noise_image: Arc<ImageView<StorageImage>>,
     pub spec_hk: Arc<ImageView<StorageImage>>,
-    pub spec_h0: Arc<ImageView<StorageImage>>,
-    pub waves_data: Arc<ImageView<StorageImage>>,
+    pub spec_h0: [Arc<ImageView<StorageImage>>; CASCADE_COUNT],
+    pub waves_data: [Arc<ImageView<StorageImage>>; CASCADE_COUNT],
 
-    pub displacement_map: Arc<ImageView<StorageImage>>,
-    pub derivatives_map: Arc<ImageView<StorageImage>>,
-    pub turbulence_map: Arc<ImageView<StorageImage>>,
+    pub displacement_map: [Arc<ImageView<StorageImage>>; CASCADE_COUNT],
+    pub derivatives_map: [Arc<ImageView<StorageImage>>; CASCADE_COUNT],
+    pub turbulence_map: [Arc<ImageView<StorageImage>>; CASCADE_COUNT],
     pub camera_depth_map: Arc<ImageView<StorageImage>>,
     pub foam_map: Arc<ImageView<StorageImage>>,
 
@@ -215,14 +235,18 @@ impl Simulation {
         command_buffer_allocator: &StandardCommandBufferAllocator,
         device: &Arc<Device>,
     ) -> Self {
-        let noise_image = Self::generate_noise_texture(allocator, queue, command_buffer_allocator);
-        let waves_data = create_image(allocator, queue.queue_family_index());
-        let spec_hk = create_image(allocator, queue.queue_family_index());
-        let spec_h0 = create_image(allocator, queue.queue_family_index());
+        let family = queue.queue_family_index();
+        let create_cascade_images =
+            || std::array::from_fn::<_, CASCADE_COUNT, _>(|_| create_image(allocator, family));
 
-        let displacement_map = create_image(allocator, queue.queue_family_index());
-        let derivatives_map = create_image(allocator, queue.queue_family_index());
-        let turbulence_map = create_image(allocator, queue.queue_family_index());
+        let noise_image = Self::generate_noise_texture(allocator, queue, command_buffer_allocator);
+        let waves_data = create_cascade_images();
+        let spec_hk = create_image(allocator, family);
+        let spec_h0 = create_cascade_images();
+
+        let displacement_map = create_cascade_images();
+        let derivatives_map = create_cascade_images();
+        let turbulence_map = create_cascade_images();
         let camera_depth_map = create_image(allocator, queue.queue_family_index());
         let foam_map = create_image(allocator, queue.queue_family_index());
 
@@ -343,58 +367,20 @@ impl Simulation {
         queue: Arc<Queue>,
         sampler: Arc<Sampler>,
     ) {
-        let mut cmd0 = AutoCommandBufferBuilder::primary(
+        let mut cmd = AutoCommandBufferBuilder::primary(
             cmd_alloc,
             queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
 
-        let wind_speed = 0.25;
+        let wind_speed = 8.0;
         let (alpha, peak_omega) = calculate_spectrum_params(wind_speed, 100000.0, 9.81);
 
+        // FFT twiddle factors only depend on the transform size, so they are
+        // computed once and shared by every cascade.
         self.run_compute_shader(
-            &mut cmd0,
-            descriptor_set_allocator,
-            self.init_spec_pipeline.clone(),
-            vec![
-                WriteDescriptorSet::image_view(0, self.waves_data.clone()),
-                WriteDescriptorSet::image_view(1, self.spec_hk.clone()),
-                WriteDescriptorSet::image_view_sampler(
-                    2,
-                    self.noise_image.clone(),
-                    sampler.clone(),
-                ),
-            ],
-            init_spec_shader::ty::PushConstants {
-                size: TEXTURE_SIZE,
-                lengthScale: 100.0,
-                cutoffHigh: 9999.0,
-                cutoffLow: 0.0001,
-                gravityAcceleration: 9.81,
-                depth: 500.0,
-
-                scale1: 1.0,
-                angle1: (-29.81_f32).to_radians(),
-                spreadBlend1: 0.95,
-                swell1: 0.198,
-                alpha1: alpha,
-                peakOmega1: peak_omega,
-                gamma1: 3.3,
-                shortWavesFade1: 0.01,
-
-                scale2: 0.5,
-                angle2: (-5.81_f32).to_radians(),
-                spreadBlend2: 0.9,
-                swell2: 0.2,
-                alpha2: alpha,
-                peakOmega2: peak_omega,
-                gamma2: 3.3,
-                shortWavesFade2: 0.01,
-            },
-        );
-        self.run_compute_shader(
-            &mut cmd0,
+            &mut cmd,
             descriptor_set_allocator,
             self.fft_init_pipeline.clone(),
             vec![WriteDescriptorSet::image_view(
@@ -403,32 +389,67 @@ impl Simulation {
             )],
             fft_init_shader::ty::PushConstants { size: TEXTURE_SIZE },
         );
-        cmd0.build()
-            .unwrap()
-            .execute(queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
 
-        let mut cmd1 = AutoCommandBufferBuilder::primary(
-            cmd_alloc,
-            queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
-        self.run_compute_shader(
-            &mut cmd1,
-            descriptor_set_allocator,
-            self.conj_spec_pipeline.clone(),
-            vec![
-                WriteDescriptorSet::image_view(0, self.spec_hk.clone()),
-                WriteDescriptorSet::image_view(1, self.spec_h0.clone()),
-            ],
-            conj_spec_shader::ty::PushConstants { size: TEXTURE_SIZE },
-        );
-        cmd1.build()
+        let cutoffs = cascade_cutoffs();
+        for c in 0..CASCADE_COUNT {
+            let (cutoff_low, cutoff_high) = cutoffs[c];
+
+            // Build this cascade's initial spectrum into the shared `spec_hk`
+            // scratch, then fold it into its own `spec_h0`. Image hazards
+            // serialise the pair so `spec_hk` can be reused next cascade.
+            self.run_compute_shader(
+                &mut cmd,
+                descriptor_set_allocator,
+                self.init_spec_pipeline.clone(),
+                vec![
+                    WriteDescriptorSet::image_view(0, self.waves_data[c].clone()),
+                    WriteDescriptorSet::image_view(1, self.spec_hk.clone()),
+                    WriteDescriptorSet::image_view_sampler(
+                        2,
+                        self.noise_image.clone(),
+                        sampler.clone(),
+                    ),
+                ],
+                init_spec_shader::ty::PushConstants {
+                    size: TEXTURE_SIZE,
+                    lengthScale: CASCADE_LENGTH_SCALES[c],
+                    cutoffHigh: cutoff_high,
+                    cutoffLow: cutoff_low,
+                    gravityAcceleration: 9.81,
+                    depth: 500.0,
+
+                    scale1: 1.0,
+                    angle1: (-29.81_f32).to_radians(),
+                    spreadBlend1: 0.95,
+                    swell1: 0.198,
+                    alpha1: alpha,
+                    peakOmega1: peak_omega,
+                    gamma1: 3.3,
+                    shortWavesFade1: 0.003,
+
+                    scale2: 0.5,
+                    angle2: (-5.81_f32).to_radians(),
+                    spreadBlend2: 0.9,
+                    swell2: 0.2,
+                    alpha2: alpha,
+                    peakOmega2: peak_omega,
+                    gamma2: 3.3,
+                    shortWavesFade2: 0.003,
+                },
+            );
+            self.run_compute_shader(
+                &mut cmd,
+                descriptor_set_allocator,
+                self.conj_spec_pipeline.clone(),
+                vec![
+                    WriteDescriptorSet::image_view(0, self.spec_hk.clone()),
+                    WriteDescriptorSet::image_view(1, self.spec_h0[c].clone()),
+                ],
+                conj_spec_shader::ty::PushConstants { size: TEXTURE_SIZE },
+            );
+        }
+
+        cmd.build()
             .unwrap()
             .execute(queue.clone())
             .unwrap()
@@ -442,37 +463,41 @@ impl Simulation {
 
     fn build_run_sets(&self, alloc: &StandardDescriptorSetAllocator) -> RunSets {
         RunSets {
-            time_spec: Self::make_set(
-                alloc,
-                &self.time_spec_pipeline,
-                vec![
-                    WriteDescriptorSet::image_view(0, self.waves_data.clone()),
-                    WriteDescriptorSet::image_view(1, self.spec_h0.clone()),
-                    WriteDescriptorSet::image_view(2, self.dx_dz.clone()),
-                    WriteDescriptorSet::image_view(3, self.dy_dxz.clone()),
-                    WriteDescriptorSet::image_view(4, self.dyx_dyz.clone()),
-                    WriteDescriptorSet::image_view(5, self.dxx_dzz.clone()),
-                ],
-            ),
+            time_spec: std::array::from_fn(|c| {
+                Self::make_set(
+                    alloc,
+                    &self.time_spec_pipeline,
+                    vec![
+                        WriteDescriptorSet::image_view(0, self.waves_data[c].clone()),
+                        WriteDescriptorSet::image_view(1, self.spec_h0[c].clone()),
+                        WriteDescriptorSet::image_view(2, self.dx_dz.clone()),
+                        WriteDescriptorSet::image_view(3, self.dy_dxz.clone()),
+                        WriteDescriptorSet::image_view(4, self.dyx_dyz.clone()),
+                        WriteDescriptorSet::image_view(5, self.dxx_dzz.clone()),
+                    ],
+                )
+            }),
             ifft: [
                 self.build_ifft_sets(alloc, &self.dx_dz),
                 self.build_ifft_sets(alloc, &self.dy_dxz),
                 self.build_ifft_sets(alloc, &self.dyx_dyz),
                 self.build_ifft_sets(alloc, &self.dxx_dzz),
             ],
-            merger: Self::make_set(
-                alloc,
-                &self.texture_merger_pipeline,
-                vec![
-                    WriteDescriptorSet::image_view(0, self.displacement_map.clone()),
-                    WriteDescriptorSet::image_view(1, self.derivatives_map.clone()),
-                    WriteDescriptorSet::image_view(2, self.turbulence_map.clone()),
-                    WriteDescriptorSet::image_view(3, self.dx_dz.clone()),
-                    WriteDescriptorSet::image_view(4, self.dy_dxz.clone()),
-                    WriteDescriptorSet::image_view(5, self.dyx_dyz.clone()),
-                    WriteDescriptorSet::image_view(6, self.dxx_dzz.clone()),
-                ],
-            ),
+            merger: std::array::from_fn(|c| {
+                Self::make_set(
+                    alloc,
+                    &self.texture_merger_pipeline,
+                    vec![
+                        WriteDescriptorSet::image_view(0, self.displacement_map[c].clone()),
+                        WriteDescriptorSet::image_view(1, self.derivatives_map[c].clone()),
+                        WriteDescriptorSet::image_view(2, self.turbulence_map[c].clone()),
+                        WriteDescriptorSet::image_view(3, self.dx_dz.clone()),
+                        WriteDescriptorSet::image_view(4, self.dy_dxz.clone()),
+                        WriteDescriptorSet::image_view(5, self.dyx_dyz.clone()),
+                        WriteDescriptorSet::image_view(6, self.dxx_dzz.clone()),
+                    ],
+                )
+            }),
         }
     }
 
@@ -520,59 +545,62 @@ impl Simulation {
             .expect("Simulation::init must run before record");
         let log_size = (TEXTURE_SIZE as f32).log2() as u32;
 
-        Self::dispatch(
-            cmd,
-            &self.time_spec_pipeline,
-            &sets.time_spec,
-            time_spec_shader::ty::PushConstants {
-                size: TEXTURE_SIZE,
-                time: self.time,
-            },
-        );
-
-        for target in &sets.ifft {
-            for stage in 0..log_size {
-                let set = if stage % 2 == 0 { &target.h_even } else { &target.h_odd };
-                Self::dispatch(
-                    cmd,
-                    &self.fft_inv_horizontal_pipeline,
-                    set,
-                    fft_inv_horizontal_shader::ty::PushConstants {
-                        size: TEXTURE_SIZE,
-                        stage,
-                    },
-                );
-            }
-            for stage in 0..log_size {
-                // If you don't continue it, data ends up in wrong buffer
-                let set = if (stage + log_size) % 2 == 0 { &target.v_even } else { &target.v_odd };
-                Self::dispatch(
-                    cmd,
-                    &self.fft_inv_vertical_pipeline,
-                    set,
-                    fft_inv_vertical_shader::ty::PushConstants {
-                        size: TEXTURE_SIZE,
-                        stage,
-                    },
-                );
-            }
+        // Each cascade runs the full evolve -> IFFT -> merge chain 
+        for c in 0..CASCADE_COUNT {
             Self::dispatch(
                 cmd,
-                &self.fft_permute_pipeline,
-                &target.permute,
-                fft_permute_shader::ty::PushConstants { size: TEXTURE_SIZE },
+                &self.time_spec_pipeline,
+                &sets.time_spec[c],
+                time_spec_shader::ty::PushConstants {
+                    size: TEXTURE_SIZE,
+                    time: self.time,
+                },
+            );
+
+            for target in &sets.ifft {
+                for stage in 0..log_size {
+                    let set = if stage % 2 == 0 { &target.h_even } else { &target.h_odd };
+                    Self::dispatch(
+                        cmd,
+                        &self.fft_inv_horizontal_pipeline,
+                        set,
+                        fft_inv_horizontal_shader::ty::PushConstants {
+                            size: TEXTURE_SIZE,
+                            stage,
+                        },
+                    );
+                }
+                for stage in 0..log_size {
+                    // If you don't continue it, data ends up in wrong buffer
+                    let set = if (stage + log_size) % 2 == 0 { &target.v_even } else { &target.v_odd };
+                    Self::dispatch(
+                        cmd,
+                        &self.fft_inv_vertical_pipeline,
+                        set,
+                        fft_inv_vertical_shader::ty::PushConstants {
+                            size: TEXTURE_SIZE,
+                            stage,
+                        },
+                    );
+                }
+                Self::dispatch(
+                    cmd,
+                    &self.fft_permute_pipeline,
+                    &target.permute,
+                    fft_permute_shader::ty::PushConstants { size: TEXTURE_SIZE },
+                );
+            }
+
+            Self::dispatch(
+                cmd,
+                &self.texture_merger_pipeline,
+                &sets.merger[c],
+                texture_merger_shader::ty::PushConstants {
+                    size: TEXTURE_SIZE,
+                    dlt: self.time,
+                },
             );
         }
-
-        Self::dispatch(
-            cmd,
-            &self.texture_merger_pipeline,
-            &sets.merger,
-            texture_merger_shader::ty::PushConstants {
-                size: TEXTURE_SIZE,
-                dlt: self.time,
-            },
-        );
     }
 
     fn dispatch(

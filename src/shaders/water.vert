@@ -6,12 +6,14 @@ layout(location = 2) in mat4 instance_model;
 layout(location = 6) in mat4 instance_normal;
 layout(location = 10) in vec4 lod_morph;
 
-layout(set = 0, binding = 0) uniform sampler2D displacement;
-layout(set = 0, binding = 1) uniform sampler2D derivatives;
-layout(set = 0, binding = 2) uniform sampler2D turbulence;
+const int CASCADES = 3;
+
+layout(set = 0, binding = 0) uniform sampler2D displacement[CASCADES];
+layout(set = 0, binding = 1) uniform sampler2D derivatives[CASCADES];
+layout(set = 0, binding = 2) uniform sampler2D turbulence[CASCADES];
 
 layout(set = 1, binding = 0) uniform OceanParams {
-    float lengthScale;
+    vec4 lengthScales; // world-space patch size of each cascade (xyz used)
     float lodScale;
     float sssBase;
     float sssScale;
@@ -42,12 +44,20 @@ void main() {
 
     viewVector = cam.pos - worldPos.xyz;
     float viewDist = length(viewVector);
-    
-    lodScale = min(params.lodScale * params.lengthScale / viewDist, 1.0);
-    
-    vec3 displacementVec = textureLod(displacement, worldUV / params.lengthScale, 0).xyz * lodScale;
+
+    // Sum the displacement of every cascade.
+    // Take LOD into account to avoid aliasing
+    vec3 displacementVec = vec3(0.0);
+    for (int c = 0; c < CASCADES; c++) {
+        float scale = params.lengthScales[c];
+        float fade = min(params.lodScale * scale / viewDist, 1.0);
+        displacementVec += textureLod(displacement[c], worldUV / scale, 0).xyz * fade;
+        if (c == 0) {
+            lodScale = fade;
+        }
+    }
     worldPos.xyz += displacementVec;
-    
+
     sssScaleFactor = max(displacementVec.y - params.sssBase, 0.0) / params.sssScale;
     
     gl_Position = cam.proj * cam.view * worldPos;

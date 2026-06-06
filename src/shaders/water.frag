@@ -6,15 +6,17 @@ layout(location = 2) in float sssScaleFactor;
 layout(location = 3) in vec3 viewVector;
 layout(location = 4) in vec4 screenPos;
 
-layout(set = 0, binding = 0) uniform sampler2D displacement;
-layout(set = 0, binding = 1) uniform sampler2D derivatives;
-layout(set = 0, binding = 2) uniform sampler2D turbulence;
+const int CASCADES = 3;
+
+layout(set = 0, binding = 0) uniform sampler2D displacement[CASCADES];
+layout(set = 0, binding = 1) uniform sampler2D derivatives[CASCADES];
+layout(set = 0, binding = 2) uniform sampler2D turbulence[CASCADES];
 layout(set = 0, binding = 3) uniform sampler2D cameraDepthTexture;
 layout(set = 0, binding = 4) uniform sampler2D foamTexture;
 layout(set = 0, binding = 5) uniform sampler2D skyTexture;
 
 layout(set = 1, binding = 0) uniform OceanParams {
-    float lengthScale;
+    vec4 lengthScales; // world-space patch size of each cascade (xyz used)
     float lodScale;
     float sssBase;
     float sssScale;
@@ -63,16 +65,27 @@ float linearEyeDepth(float depth) {
 }
 
 void main() {
-    vec4 derivs = texture(derivatives, worldUV / params.lengthScale);
-    
+    float viewDist = length(viewVector);
+
+    // Average multiple cascades since now we don't have only 1
+    vec4 derivs = vec4(0.0);
+    float jacobian = 0.0;
+    for (int c = 0; c < CASCADES; c++) {
+        float scale = params.lengthScales[c];
+        vec2 uv = worldUV / scale;
+        float fade = min(params.lodScale * scale / viewDist, 1.0);
+        derivs += texture(derivatives[c], uv) * fade;
+        jacobian += texture(turbulence[c], uv).x;
+    }
+    jacobian /= float(CASCADES);
+
     vec2 slope = vec2(
         derivs.x / (1.0 + derivs.z),
         derivs.y / (1.0 + derivs.w)
     );
     vec3 worldNormal = normalize(vec3(-slope.x, 1.0, -slope.y));
-    
+
     // Calculate foam/turbulence (jacobian)
-    float jacobian = texture(turbulence, worldUV / params.lengthScale).x;
     jacobian = clamp((-jacobian + material.foamBias) * material.foamScale, 0.0, 1.0);
     
     // Contact foam (depth-based)

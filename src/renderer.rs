@@ -44,7 +44,7 @@ use crate::{
     camera::Camera,
     draw_cache::DrawCache,
     instance::{Instance, Mesh, Vertex},
-    simulation::Simulation,
+    simulation::{CASCADE_LENGTH_SCALES, Simulation},
 };
 
 vulkano::impl_vertex!(Vertex, position, uv);
@@ -504,10 +504,15 @@ impl Renderer {
             },
             false,
             water_frag::ty::OceanParams {
-                lengthScale: 50.0,
+                lengthScales: [
+                    CASCADE_LENGTH_SCALES[0],
+                    CASCADE_LENGTH_SCALES[1],
+                    CASCADE_LENGTH_SCALES[2],
+                    0.0,
+                ],
                 lodScale: 1.0,
                 sssBase: -0.1,
-                sssScale: 4.8,
+                sssScale: 12.0,
             },
         )
         .unwrap();
@@ -521,7 +526,7 @@ impl Renderer {
             water_frag::ty::MaterialParams {
                 color: [0.03457636, 0.12297464, 0.1981132, 1.0],
                 foamColor: [1.0, 1.0, 1.0, 1.0],
-                sssColor: [0.1541919, 0.8857628, 0.990566, 1.0],
+                sssColor: [0.1, 0.45, 0.42, 1.0],
                 sssStrength: 0.133,
                 roughness: 0.311,
                 roughnessScale: 0.0044,
