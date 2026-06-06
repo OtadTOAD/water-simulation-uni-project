@@ -32,7 +32,6 @@ use vulkano::{
     },
     sync::{self, FlushError, GpuFuture},
 };
-use vulkano_win::VkSurfaceBuild;
 use winit::window::{Window, WindowBuilder};
 
 use crate::{
@@ -70,6 +69,59 @@ mod water_frag {
 
 fn get_window(surface: &Arc<Surface>) -> &Window {
     surface.object().unwrap().downcast_ref::<Window>().unwrap()
+}
+
+fn required_surface_extensions(library: &VulkanLibrary) -> vulkano::instance::InstanceExtensions {
+    let ideal = vulkano::instance::InstanceExtensions {
+        khr_surface: true,
+        khr_xlib_surface: true,
+        khr_xcb_surface: true,
+        khr_wayland_surface: true,
+        khr_win32_surface: true,
+        khr_get_surface_capabilities2: true,
+        khr_get_physical_device_properties2: true,
+        ..vulkano::instance::InstanceExtensions::empty()
+    };
+    library.supported_extensions().intersection(&ideal)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn create_surface(
+    window: Arc<Window>,
+    instance: Arc<vulkano::instance::Instance>,
+) -> Arc<Surface> {
+    use winit::platform::unix::WindowExtUnix;
+    unsafe {
+        match (window.wayland_display(), window.wayland_surface()) {
+            (Some(display), Some(surface)) => {
+                Surface::from_wayland(instance, display, surface, Some(window)).unwrap()
+            }
+            _ => Surface::from_xlib(
+                instance,
+                window.xlib_display().unwrap(),
+                window.xlib_window().unwrap() as _,
+                Some(window),
+            )
+            .unwrap(),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn create_surface(
+    window: Arc<Window>,
+    instance: Arc<vulkano::instance::Instance>,
+) -> Arc<Surface> {
+    use winit::platform::windows::WindowExtWindows;
+    unsafe {
+        Surface::from_win32(
+            instance,
+            window.hinstance() as *const (),
+            window.hwnd() as *const (),
+            Some(window),
+        )
+        .unwrap()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,8 +163,7 @@ impl Renderer {
         let instance = {
             let library = VulkanLibrary::new().unwrap();
 
-            let mut extensions = vulkano_win::required_extensions(&library);
-            extensions.khr_get_surface_capabilities2 = true;
+            let extensions = required_surface_extensions(&library);
 
             vulkano::instance::Instance::new(
                 library,
@@ -126,9 +177,8 @@ impl Renderer {
             .unwrap()
         };
 
-        let surface = WindowBuilder::new()
-            .build_vk_surface(event_loop, instance.clone())
-            .unwrap();
+        let window = Arc::new(WindowBuilder::new().build(event_loop).unwrap());
+        let surface = create_surface(window, instance.clone());
         let device_extensions = device::DeviceExtensions {
             ext_full_screen_exclusive: false,
             khr_swapchain: true,
@@ -388,11 +438,6 @@ impl Renderer {
 
     pub fn run_sim(&mut self, delta_time: f32) {
         self.simulation.time += delta_time;
-        self.simulation.run(
-            &self.command_buffer_allocator,
-            &self.descriptor_set_allocator,
-            self.queue.clone(),
-        );
     }
 
     pub fn window(&self) -> &Window {
@@ -545,6 +590,8 @@ impl Renderer {
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
+
+        self.simulation.record(&mut commands);
 
         commands
             .begin_render_pass(
