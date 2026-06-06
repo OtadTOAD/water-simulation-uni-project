@@ -5,5 +5,4 @@ Used:
 https://www.youtube.com/watch?v=kGEqaX4Y4bQ
 https://arxiv.org/abs/1109.6494v1
 
-Yes, this is unoptimized.
-I do not care.
+Target ~144 FPS.
