@@ -90,6 +90,13 @@ void main() {
     );
     vec3 worldNormal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
+    // Attempt to fight shimmer at long distances by checking how much normals change
+    // Tbh idk if this even does anything
+    vec3 dNdx = dFdx(worldNormal);
+    vec3 dNdy = dFdy(worldNormal);
+    float normalVar  = max(dot(dNdx, dNdx), dot(dNdy, dNdy));
+    float specularAA = clamp(1.0 - normalVar * 4.0, 0.0, 1.0);
+
     // Calculate foam/turbulence (jacobian)
     jacobian = clamp((-jacobian + material.foamBias) * material.foamScale, 0.0, 1.0);
     
@@ -109,6 +116,7 @@ void main() {
         1.0 / (1.0 + length(viewVector) * material.roughnessScale)
     );
     float smoothness = mix(distanceGloss, 0.0, jacobian);
+    smoothness *= specularAA;
     
     // Subsurface scattering
     vec3 viewDir = normalize(viewVector);
@@ -136,6 +144,7 @@ void main() {
     float ndoth = max(0.0, dot(worldNormal, halfVec));
     float specPower = exp2(smoothness * 10.0 + 1.0);
     vec3 specular = vec3(pow(ndoth, specPower)) * smoothness * WATER_LIGHT;
+    specular = min(specular, vec3(2.0));
 
     // Foam sits on top as a simple diffuse-lit layer.
     float ndotl = max(0.0, dot(worldNormal, material.lightDir));
