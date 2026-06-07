@@ -264,7 +264,12 @@ impl Renderer {
             .unwrap()
         };
 
-        let window = Arc::new(WindowBuilder::new().build(event_loop).unwrap());
+        let window = Arc::new(
+            WindowBuilder::new()
+                .with_inner_size(winit::dpi::PhysicalSize::new(800u32, 800u32))
+                .build(event_loop)
+                .unwrap(),
+        );
         let surface = create_surface(window, instance.clone());
         let device_extensions = device::DeviceExtensions {
             ext_full_screen_exclusive: false,
