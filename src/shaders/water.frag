@@ -132,7 +132,7 @@ void main() {
     // grazing reflections never sample the (empty) lower hemisphere.
     vec3 reflDir = reflect(-viewDir, worldNormal);
     reflDir.y = abs(reflDir.y);
-    vec3 skyReflection = sampleSky(reflDir, 0.0);
+    vec3 skyReflection = sampleSky(reflDir, lodScale);
 
     // Blend the deep-water body colour (with SSS tint) and the reflected sky.
     // The body colour is dimmed to the night ambient; the reflection already
@@ -151,6 +151,14 @@ void main() {
     vec3 foamLit = material.foamColor.rgb * (0.3 + ndotl * 0.7) * WATER_LIGHT;
 
     vec3 color = mix(surface + specular, foamLit, jacobian);
+
+    const float FOG_DENSITY = 0.005;
+    const float FOG_SKY_LOD = 6.0;
+    vec3 toFrag = -viewDir; 
+    vec3 horizonDir = normalize(vec3(toFrag.x, 0.02, toFrag.z));
+    vec3 fogColor = sampleSky(horizonDir, FOG_SKY_LOD);
+    float fog = 1.0 - exp(-viewDist * FOG_DENSITY);
+    color = mix(color, fogColor, fog);
 
     outColor = vec4(color, 1.0);
 }

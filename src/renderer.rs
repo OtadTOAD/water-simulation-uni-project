@@ -31,7 +31,9 @@ use vulkano::{
         },
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
-    sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo},
+    sampler::{
+        Filter, LOD_CLAMP_NONE, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode,
+    },
     swapchain::{
         self, AcquireError, PresentMode, Surface, Swapchain, SwapchainAcquireFuture,
         SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo,
@@ -109,10 +111,7 @@ fn required_surface_extensions(library: &VulkanLibrary) -> vulkano::instance::In
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn create_surface(
-    window: Arc<Window>,
-    instance: Arc<vulkano::instance::Instance>,
-) -> Arc<Surface> {
+fn create_surface(window: Arc<Window>, instance: Arc<vulkano::instance::Instance>) -> Arc<Surface> {
     use winit::platform::unix::WindowExtUnix;
     unsafe {
         match (window.wayland_display(), window.wayland_surface()) {
@@ -131,10 +130,7 @@ fn create_surface(
 }
 
 #[cfg(target_os = "windows")]
-fn create_surface(
-    window: Arc<Window>,
-    instance: Arc<vulkano::instance::Instance>,
-) -> Arc<Surface> {
+fn create_surface(window: Arc<Window>, instance: Arc<vulkano::instance::Instance>) -> Arc<Surface> {
     use winit::platform::windows::WindowExtWindows;
     unsafe {
         Surface::from_win32(
@@ -190,7 +186,7 @@ fn load_sky_texture(
             height: height as u32,
             array_layers: 1,
         },
-        MipmapsCount::One,
+        MipmapsCount::Log2,
         Format::R32G32B32A32_SFLOAT,
         &mut uploader,
     )
@@ -468,6 +464,8 @@ impl Renderer {
                     SamplerAddressMode::ClampToEdge, // latitude clamps at the poles
                     SamplerAddressMode::ClampToEdge,
                 ],
+                mipmap_mode: SamplerMipmapMode::Linear,
+                lod: 0.0..=LOD_CLAMP_NONE,
                 ..Default::default()
             },
         )
