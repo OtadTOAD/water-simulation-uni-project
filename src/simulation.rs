@@ -110,7 +110,7 @@ mod texture_merger_shader {
     }
 }
 
-pub const TEXTURE_SIZE: u32 = 512;
+pub const TEXTURE_SIZE: u32 = 256;
 const WORKGROUP_SIZE: [u32; 3] = [TEXTURE_SIZE / 8, TEXTURE_SIZE / 8, 1];
 
 pub const CASCADE_COUNT: usize = 3;
