@@ -25,6 +25,24 @@ vec3 tonemap(vec3 c) {
 
 void main() {
     vec3 dir = normalize(viewRay);
-    vec3 color = texture(skyTexture, equirectUV(dir)).rgb;
+
+    vec3 ddx = dFdx(dir);
+    vec3 ddy = dFdy(dir);
+
+    // Compute uvs from direction
+    float r2 = max(dir.x * dir.x + dir.z * dir.z, 1e-8);
+    float du_dx = (dir.x * ddx.z - dir.z * ddx.x) / r2 / (2.0 * PI);
+    float du_dy = (dir.x * ddy.z - dir.z * ddy.x) / r2 / (2.0 * PI);
+
+    // v = acos(y)/PI, so dv = -dy / (PI * sqrt(1 - y^2)).
+    float s = max(sqrt(1.0 - dir.y * dir.y), 1e-4);
+    float dv_dx = -ddx.y / (PI * s);
+    float dv_dy = -ddy.y / (PI * s);
+
+    vec2 uv = equirectUV(dir);
+    vec2 gradX = vec2(du_dx, dv_dx);
+    vec2 gradY = vec2(du_dy, dv_dy);
+
+    vec3 color = textureGrad(skyTexture, uv, gradX, gradY).rgb;
     outColor = vec4(tonemap(color), 1.0);
 }

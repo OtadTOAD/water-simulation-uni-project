@@ -12,7 +12,8 @@ use vulkano::{
         PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
     },
     device::{
-        self, Device, DeviceCreateInfo, Queue, QueueCreateInfo, physical::PhysicalDeviceType,
+        self, Device, DeviceCreateInfo, Features, Queue, QueueCreateInfo,
+        physical::PhysicalDeviceType,
     },
     format::Format,
     image::{
@@ -295,10 +296,17 @@ impl Renderer {
             })
             .expect("No suitable physical device found");
 
+        let anisotropy_supported = physical_device.supported_features().sampler_anisotropy;
+        let max_anisotropy = physical_device.properties().max_sampler_anisotropy;
+
         let (device, mut queues) = Device::new(
             physical_device,
             DeviceCreateInfo {
                 enabled_extensions: device_extensions,
+                enabled_features: Features {
+                    sampler_anisotropy: anisotropy_supported,
+                    ..Features::empty()
+                },
                 queue_create_infos: vec![QueueCreateInfo {
                     queue_family_index,
                     ..Default::default()
@@ -466,6 +474,11 @@ impl Renderer {
                 ],
                 mipmap_mode: SamplerMipmapMode::Linear,
                 lod: 0.0..=LOD_CLAMP_NONE,
+                anisotropy: if anisotropy_supported {
+                    Some(max_anisotropy.min(16.0))
+                } else {
+                    None
+                },
                 ..Default::default()
             },
         )
