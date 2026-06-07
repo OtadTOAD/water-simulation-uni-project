@@ -180,6 +180,7 @@ impl Camera {
     }
 
     pub fn inv_view_proj_raw(&self) -> [[f32; 4]; 4] {
-        glm::inverse(&(self.proj * self.view)).into()
+        let rotation = glm::mat3_to_mat4(&glm::mat4_to_mat3(&self.view));
+        glm::inverse(&(self.proj * rotation)).into()
     }
 }

@@ -14,7 +14,6 @@ void main() {
 
     // Place at the far plane so the sky sits behind all geometry.
     gl_Position = vec4(ndc, 1.0, 1.0);
-
     vec4 world = cam.invViewProj * vec4(ndc, 1.0, 1.0);
-    viewRay = world.xyz / world.w - cam.pos;
+    viewRay = world.xyz / world.w;
 }

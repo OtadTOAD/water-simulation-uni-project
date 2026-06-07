@@ -527,7 +527,7 @@ impl Renderer {
                 color: [0.03457636, 0.12297464, 0.1981132, 1.0],
                 foamColor: [1.0, 1.0, 1.0, 1.0],
                 sssColor: [0.1, 0.45, 0.42, 1.0],
-                sssStrength: 0.133,
+                sssStrength: 0.05,
                 roughness: 0.311,
                 roughnessScale: 0.0044,
                 maxGloss: 0.91,
